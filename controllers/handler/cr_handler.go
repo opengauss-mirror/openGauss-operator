@@ -522,10 +522,11 @@ func (s *syncHandlerImpl) processMostAvailableParameter(cluster *opengaussv1.Ope
 		if changed, e := s.dbService.UpdateMostAvailable(primaryPod, enableMostAvailable); e != nil {
 			return e
 		} else if changed {
-			_, ok := s.dbService.RestartPrimary(primaryPod)
-			if !ok {
-				return fmt.Errorf("[%s:%s]未能将实例%s重启为主节点", cluster.Namespace, cluster.Name, primaryPod.Status.PodIP)
-			}
+			// 修改most_available_sync参数后，无需重新重启db
+			//	_, ok := s.dbService.RestartPrimary(primaryPod)
+			//	if !ok {
+			//		return fmt.Errorf("[%s:%s]未能将实例%s重启为主节点", cluster.Namespace, cluster.Name, primaryPod.Status.PodIP)
+			//	}
 			s.eventService.ConfigureMostAvailable(cluster, enableMostAvailable)
 		}
 	}
