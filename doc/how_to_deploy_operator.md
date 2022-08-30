@@ -11,7 +11,7 @@
 ## 1. 下载并安装minikube  
 以rpm包形式下载安装minikube：
 ```bash
-curl -Lo minikube https://github.com/kubernetes/minikube/releases/download/v1.20.0/minikube-1.20.0-0.x86_64.rpm  
+curl -LO https://github.com/kubernetes/minikube/releases/download/v1.20.0/minikube-1.20.0-0.x86_64.rpm  
 rpm -Uvh minikube-1.20.0-0.x86_64.rpm  
 ```
 或下载minikube二进制文件并放到系统路径中
@@ -136,7 +136,7 @@ FROM openeuler-20.03-lts-sp3:latest
 
 COPY tini-amd64 /usr/local/bin/tini
 COPY scriptrunner_x86 /usr/local/bin/scriptrunner
-COPY openGauss-3.0.0-CentOS-64bit.tar.bz2 openGauss-3.0.0-CentOS-64bit.tar.bz2
+COPY openGauss-3.0.0-openEuler-64bit.tar.bz2 openGauss-3.0.0-openEuler-64bit.tar.bz2
 # COPY filebeat-7.11.1-linux-x86_64.tar.gz /gauss/files/filebeat-7.11.1-linux-x86_64.tar.gz
 ADD filebeat-7.11.1-linux-x86_64.tar.gz /opt
 
@@ -163,8 +163,8 @@ RUN yum -y install sudo which bzip2 numactl-devel libaio libaio-devel readline-d
     mkdir -p /gauss/openGauss/tmp && \
     mkdir -p /gaussdata/openGauss/db1 && \
     mkdir -p /gaussarch && \
-    tar xf openGauss-3.0.0-CentOS-64bit.tar.bz2 -C /gauss/openGauss/app && \
-    rm -rf openGauss-3.0.0-CentOS-64bit.tar.bz2 && \
+    tar xf openGauss-3.0.0-openEuler-64bit.tar.bz2 -C /gauss/openGauss/app && \
+    rm -rf openGauss-3.0.0-openEuler-64bit.tar.bz2 && \
     chown -R omm:dbgrp /gaussarch && \
     chown -R omm:dbgrp /gaussdata && \
     chown -R omm:dbgrp /gauss/openGauss && \
@@ -188,6 +188,12 @@ RUN yum -y install sudo which bzip2 numactl-devel libaio libaio-devel readline-d
 USER omm
 ```
 使用编辑好的dockerfile打包openGauss镜像
+
+打包镜像需要依赖`tini-amd64`, `scriptrunner_x86`, `filebeat-7.11.1-linux-x86_64.tar.gz` 以及 `openGauss-3.0.0-openEuler-64bit.tar.bz2`文件。 \
+`tini-amd64`, `scriptrunner_x86`文件在当前仓库`openGauss-operator/execfiles`目录下。 \
+`filebeat-7.11.1-linux-x86_64.tar.gz`下载地址参考下面第3步骤 *准备openGauss容器相关的介质和依赖*。 \
+openGauss的镜像从社区官网下载极简版。
+
 ```bash
 # 下载openGauss极简版，可以根据实际情况下载对应架构
 curl -LO https://opengauss.obs.cn-south-1.myhuaweicloud.com/3.0.0/x86_openEuler/openGauss-3.0.0-openEuler-64bit.tar.bz2
