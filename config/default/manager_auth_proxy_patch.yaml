@@ -1,0 +1,29 @@
+#Copyright (c) 2021 opensource@cmbc.com.cn
+#OpenGauss Operator is licensed under Mulan PSL v2.
+#You can use this software according to the terms and conditions of the Mulan PSL v2.
+#You may obtain a copy of Mulan PSL v2 at:
+#         http://license.coscl.org.cn/MulanPSL2
+#THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
+#EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
+#MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+#See the Mulan PSL v2 for more details.
+
+# This patch inject a sidecar container which is a HTTP proxy for the
+# controller manager, it performs RBAC authorization against the Kubernetes API using SubjectAccessReviews.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        args:
+        - "--metrics-addr=127.0.0.1:8080"
+        - "--max-concurrent-reconcile=10"
+        - "--leader-elect"
+        - "--watch-namespaces="
+        - "--exclude-namespaces="
+        - "--pollingPeriod=60" #轮询周期默认设置为60秒

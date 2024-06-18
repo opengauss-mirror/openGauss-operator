@@ -1,0 +1,78 @@
+#Copyright (c) 2021 opensource@cmbc.com.cn
+#OpenGauss Operator is licensed under Mulan PSL v2.
+#You can use this software according to the terms and conditions of the Mulan PSL v2.
+#You may obtain a copy of Mulan PSL v2 at:
+#         http://license.coscl.org.cn/MulanPSL2
+#THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
+#EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
+#MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
+#See the Mulan PSL v2 for more details.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    control-plane: controller-manager
+  name: system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc
+  namespace: system
+  labels:
+    control-plane: controller-manager
+spec:
+  ports:
+  - port: 8080
+    name: operator
+  clusterIP: None
+  selector:
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: controller-manager
+  namespace: system
+  labels:
+    control-plane: controller-manager
+spec:
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  replicas: 1
+  serviceName: svc
+  template:
+    metadata:
+      labels:
+        control-plane: controller-manager
+    spec:
+      containers:
+      - command:
+        - /usr/local/bin/opengauss-operator
+        args:
+        - --leader-elect
+        image: controller:latest
+        name: manager
+        env: 
+        - name: INSTANCE_NAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: metadata.name
+        - name: TOTAL_COUNT
+          value: "1"
+          #K8S版本，用于动态设置带宽，1.14版本设置带宽时需要*1024
+        - name: K8S_VERSION
+          value: "1.22"
+        resources:
+          limits:
+            cpu: 100m
+            memory: 300Mi
+          requests:
+            cpu: 100m
+            memory: 20Mi
+      terminationGracePeriodSeconds: 10
+
+
