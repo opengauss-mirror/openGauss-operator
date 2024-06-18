@@ -131,7 +131,7 @@ docker run -it openeuler-20.03-lts-sp3 /bin/bash
 # 关闭TMOUT自动登出
 echo 'unset TMOUT' >> /etc/bashrc
 # 安装需要的软件
-yum -y install sudo which bzip2 numactl-devel libaio libaio-devel readline-devel net-tools psmisc io
+yum -y install sudo which bzip2 numactl-devel libaio libaio-devel readline-devel net-tools psmisc iotop
 yum -y install lrzsz iputils libnsl
 ```
 ## 2. openGauss
