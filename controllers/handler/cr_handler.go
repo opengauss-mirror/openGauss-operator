@@ -14,6 +14,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -125,7 +126,8 @@ func (s *syncHandlerImpl) isNeedReconcile(cluster *opengaussv1.OpenGaussCluster)
 		s.eventService.ClusterCreate(cluster)
 		return true
 	}
-
+	syncStatesStr, _ := json.Marshal(cluster.Status.SyncStates)
+	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]on %s Sync State is [%v]", cluster.Namespace, cluster.Name, cluster.Status.LastUpdateTime, string(syncStatesStr)))
 	if cluster.MaintainModeChange() {
 		return true
 	} else if cluster.IsMaintaining() {
@@ -171,6 +173,9 @@ func (s *syncHandlerImpl) isNeedReconcile(cluster *opengaussv1.OpenGaussCluster)
 				s.updateStatus(cluster, cluster.Status.State, "", "", false)
 			}
 		}
+		if !cluster.IsNew() && cluster.Status.Spec.NetworkClass == "" && cluster.Spec.NetworkClass == opengaussv1.NETWORK_CALICO {
+			s.updateStatus(cluster, cluster.Status.State, "", "", false)
+		}
 		return false
 	}
 }
@@ -197,6 +202,7 @@ func (s *syncHandlerImpl) isClusterReconcileRequired(cluster *opengaussv1.OpenGa
 		s.Log.Error(err, fmt.Sprintf("[%s:%s]查询集群Pod，发生错误", cluster.Namespace, cluster.Name))
 		return false
 	}
+
 	ipSet := cluster.GetValidSpec().IpSet()
 	podSet := utils.NewSet()
 	primaryArray := make([]string, 0)
@@ -208,6 +214,7 @@ func (s *syncHandlerImpl) isClusterReconcileRequired(cluster *opengaussv1.OpenGa
 		podSet.Add(podIP)
 		if !s.resourceService.IsPodReady(pod) {
 			notReadyCount++
+			s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, &pod)
 			continue
 		}
 		dbstate, err := s.dbService.CheckDBState(&pod)
@@ -220,10 +227,13 @@ func (s *syncHandlerImpl) isClusterReconcileRequired(cluster *opengaussv1.OpenGa
 		if dbstate.IsInMaintenance() {
 			maintenanceCount++
 		} else if dbstate.NeedConfigure() {
+			s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, &pod)
 			notReadyCount++
+			continue
 		}
 		if !validatePodLabel(pod, dbstate) {
 			notReadyCount++
+			continue
 		}
 		previousState := cluster.Status.PodState[podIP]
 		if dbstate.PrintableString() != previousState {
@@ -246,6 +256,11 @@ func (s *syncHandlerImpl) isClusterReconcileRequired(cluster *opengaussv1.OpenGa
 	}
 	if cluster.IsPrimary() && (len(primaryArray) != 1 || !ipSet.Contains(primaryArray[0]) || cluster.Status.Primary != primaryArray[0]) {
 		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]主节点状态与预期不符", cluster.Namespace, cluster.Name))
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]localrole is :%s,len(primaryArray) is :%v, cluster.Status.Primary is :%s",
+			cluster.Namespace, cluster.Name, cluster.GetValidSpec().LocalRole, len(primaryArray), cluster.Status.Primary))
+		if len(primaryArray) > 0 {
+			s.Log.V(1).Info(fmt.Sprintf("[%s:%s]current primary is %v", cluster.Namespace, cluster.Name, primaryArray))
+		}
 		s.setCondition(cluster, opengaussv1.OpenGaussClusterInstancesReady, corev1.ConditionFalse, "")
 		s.setCondition(cluster, opengaussv1.OpenGaussClusterServiceReady, corev1.ConditionFalse, "")
 		needReconcile = true
@@ -274,6 +289,29 @@ func (s *syncHandlerImpl) isClusterReconcileRequired(cluster *opengaussv1.OpenGa
 		} else if misMatchCount > 0 {
 			s.updateStatus(cluster, opengaussv1.OpenGaussClusterStateReady, "", "", false)
 		}
+		mostAvailableEnabled, _ := s.getMostAvailableFlag(cluster)
+		expectCount := cluster.GetMostAvailableCount()
+		if expectCount == 0 && !mostAvailableEnabled { //单实例，需要校验most_available_sync是否为on，如果不是on 则设置为on，在updateSyncStates完成修改
+			s.updateStatus(cluster, opengaussv1.OpenGaussClusterStateReady, "", "", false)
+		}
+		if cluster.IsPrimary() {
+			if primaryPod, err := s.resourceService.GetPod(cluster.Namespace, cluster.GetPodName(cluster.Status.Primary)); err == nil {
+				if s.resourceService.IsPodReady(*primaryPod) {
+					if usageRate, err := s.dbService.QueryDatadirStorageUsage(primaryPod, cluster.Name); err == nil {
+						if defaultTransactionChange, currVal := s.dbService.IsExceedStorageThreshold(primaryPod, usageRate); defaultTransactionChange {
+							s.eventService.ConfigureDefaultTransactionReadOnly(cluster, currVal)
+						}
+					} else {
+						s.dbService.SetDefaultTransactionReadOnly(primaryPod, utils.DEFAULT_TRANSACTION_READ_ONLY_OFF)
+					}
+				}
+
+			}
+		}
+	}
+	if !s.resourceService.ClusterPodsIsExtendIpMatch(cluster) {
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]集群下存在pod extendIp配置不正确", cluster.Namespace, cluster.Name))
+		needReconcile = true
 	}
 	return needReconcile
 }
@@ -300,13 +338,11 @@ func (s *syncHandlerImpl) setRestorePhase(cluster *opengaussv1.OpenGaussCluster,
 	}
 	cluster.Status.RestorePhase = phase
 	cluster.Status.LastUpdateTime = time.Now().Format(utils.TIME_FORMAT)
+
 	if e := s.updateClusterStatus(cluster); e != nil {
 		return e
 	}
-	if s.ensureStatusUpdate {
-		return s.waitRestorePhaseUpdateComplete(cluster.Namespace, cluster.Name, phase, cluster.GetValidSpec().Schedule.ProcessTimeout)
-	}
-	return nil
+	return s.waitRestorePhaseUpdateComplete(cluster.Namespace, cluster.Name, phase, cluster.GetValidSpec().Schedule.ProcessTimeout)
 }
 
 /*
@@ -350,9 +386,7 @@ func (s *syncHandlerImpl) setCondition(cluster *opengaussv1.OpenGaussCluster, co
 		if e := s.updateClusterStatus(cluster); e != nil {
 			return e
 		}
-		if s.ensureStatusUpdate {
-			return s.waitConditionUpdateComplete(cluster.Namespace, cluster.Name, message, conditionType, status, cluster.GetValidSpec().Schedule.ProcessTimeout)
-		}
+		return s.waitConditionUpdateComplete(cluster.Namespace, cluster.Name, message, conditionType, status, cluster.GetValidSpec().Schedule.ProcessTimeout)
 	}
 	return nil
 }
@@ -400,6 +434,7 @@ func (s *syncHandlerImpl) updateStatus(cluster *opengaussv1.OpenGaussCluster, st
 				podState = dbstate.PrintableString()
 			}
 		} else {
+			s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, &pod)
 			podState = fmt.Sprintf("Pod当前阶段是%s", string(pod.Status.Phase))
 		}
 		if podIP != "" {
@@ -419,6 +454,7 @@ func (s *syncHandlerImpl) updateStatus(cluster *opengaussv1.OpenGaussCluster, st
 			}
 		}
 	}
+
 	if !utils.CompareMaps(currPodStates, cluster.Status.PodState) {
 		cluster.Status.PodState = currPodStates
 		update = true
@@ -430,6 +466,12 @@ func (s *syncHandlerImpl) updateStatus(cluster *opengaussv1.OpenGaussCluster, st
 		cluster.Status.State = state
 		update = true
 	}
+	//轮询周期修改，不需要修改cr
+	if cluster.Status.Spec.Schedule.PollingPeriod != cluster.Spec.Schedule.PollingPeriod {
+		cluster.Status.Spec.Schedule.PollingPeriod = cluster.Spec.Schedule.PollingPeriod
+		update = true
+	}
+
 	//查询当前各节点同步状态
 	//如果查询出错，则保持之前的同步状态
 	//currSyncStates用于后续校验更新CR status的结果
@@ -442,25 +484,27 @@ func (s *syncHandlerImpl) updateStatus(cluster *opengaussv1.OpenGaussCluster, st
 			update = true
 		}
 	}
+	if !cluster.IsNew() && cluster.Status.Spec.NetworkClass == "" && cluster.Spec.NetworkClass == opengaussv1.NETWORK_CALICO {
+		cluster.Status.Spec.NetworkClass = opengaussv1.NETWORK_CALICO
+		s.Log.Info(fmt.Sprintf("[%s:%s]存量集群，更新networkClass为：%s", cluster.Namespace, cluster.Name, cluster.Status.Spec.NetworkClass))
+		update = true
+	}
+	if cluster.MaintainModeChange() {
+		cluster.Status.Spec.Maintenance = cluster.Spec.Maintenance
+		update = true
+	}
 	if update {
 		cluster.Status.LastUpdateTime = time.Now().Format(utils.TIME_FORMAT)
 		if e := s.updateClusterStatus(cluster); e != nil {
 			return e
 		}
-		if s.ensureStatusUpdate {
-			return s.waitStatusUpdateComplete(cluster.Namespace, cluster.Name, message, state, copySpec, cluster.Status.Spec.DeepCopy(), cluster.Status.PodState, currSyncStates, cluster.GetValidSpec().Schedule.ProcessTimeout)
-		} else if cluster.Status.State == opengaussv1.OpenGaussClusterStateReady {
-			time.Sleep(time.Second * 30)
-		}
+		return s.waitStatusUpdateComplete(cluster.Namespace, cluster.Name, message, state, copySpec, cluster.Status.Spec.DeepCopy(), cluster.Status.PodState, currSyncStates, cluster.GetValidSpec().Schedule.ProcessTimeout)
 	}
 	return nil
 }
+
 func (s *syncHandlerImpl) updateSyncStates(cluster *opengaussv1.OpenGaussCluster) ([]opengaussv1.SyncState, bool, error) {
 	currSyncStates := make([]opengaussv1.SyncState, 0)
-	expectCount := cluster.GetMostAvailableCount()
-	if expectCount == 0 {
-		return currSyncStates, false, nil
-	}
 	update := false
 	var err error
 	if cluster.IsStandby() && len(cluster.Status.SyncStates) > 0 {
@@ -488,7 +532,8 @@ func (s *syncHandlerImpl) updateSyncStates(cluster *opengaussv1.OpenGaussCluster
 					update = true
 				}
 				syncCount := getSyncInstanceCount(currSyncStates)
-				if syncCount == expectCount && mostAvailableEnabled { //如果同步从节点数量达到预期，而most_available开启，则立刻关闭
+				expectCount := cluster.GetMostAvailableCount()
+				if expectCount > 0 && syncCount == expectCount && mostAvailableEnabled { //如果同步从节点数量达到预期，而most_available开启，则立刻关闭
 					if e1 := s.processMostAvailableParameter(cluster, !mostAvailableEnabled); e1 != nil {
 						err = e1
 					} else {
@@ -507,6 +552,13 @@ func (s *syncHandlerImpl) updateSyncStates(cluster *opengaussv1.OpenGaussCluster
 						time.Sleep(time.Second * STATUS_UPDATE_RETRY_INTERVAL)
 						wait += STATUS_UPDATE_RETRY_INTERVAL
 					}
+				} else if expectCount == 0 && !mostAvailableEnabled { //单实例，需要校验most_available_sync是否为on，如果不是on 则设置为on
+					if e1 := s.processMostAvailableParameter(cluster, !mostAvailableEnabled); e1 != nil {
+						err = e1
+					} else {
+						s.Log.Info(fmt.Sprintf("[%s:%s]集群为单实例，设置most_available_sync为on", cluster.Namespace, cluster.Name))
+					}
+					break
 				} else {
 					break
 				}
@@ -519,9 +571,9 @@ func (s *syncHandlerImpl) processMostAvailableParameter(cluster *opengaussv1.Ope
 	if primaryPod, err := s.resourceService.GetPod(cluster.Namespace, cluster.GetPodName(cluster.Status.Primary)); err != nil {
 		return err
 	} else {
-		if changed, e := s.dbService.UpdateMostAvailable(primaryPod, enableMostAvailable); e != nil {
+		if _, e := s.dbService.UpdateMostAvailable(primaryPod, enableMostAvailable); e != nil {
 			return e
-		} else if changed {
+		} else {
 			// 修改most_available_sync参数后，无需重新重启db
 			//	_, ok := s.dbService.RestartPrimary(primaryPod)
 			//	if !ok {
@@ -532,6 +584,7 @@ func (s *syncHandlerImpl) processMostAvailableParameter(cluster *opengaussv1.Ope
 	}
 	return nil
 }
+
 func getSyncInstanceCount(syncStates []opengaussv1.SyncState) int {
 	syncCount := 0
 	for _, state := range syncStates {
@@ -560,7 +613,7 @@ func (s *syncHandlerImpl) getMostAvailableFlag(cluster *opengaussv1.OpenGaussClu
 		return enabled, nil
 	}
 	primaryPod, err := s.resourceService.GetPod(cluster.Namespace, cluster.GetPodName(cluster.Status.Primary))
-	if err != nil {
+	if err != nil || !s.resourceService.IsPodReady(*primaryPod) {
 		return enabled, err
 	}
 	return s.dbService.IsMostAvailableEnable(primaryPod)
@@ -643,7 +696,8 @@ func (s *syncHandlerImpl) waitStatusUpdateComplete(namespace, name, message stri
 			}
 		}
 		if retryCount*STATUS_UPDATE_RETRY_INTERVAL >= timeout {
-			return fmt.Errorf("[%s:%s]集群状态更新错误，重试次数达到上限%d次，终止重试", namespace, name, timeout)
+			s.Log.Error(fmt.Errorf("[%s:%s]集群状态更新错误，重试次数达到上限%d次，终止重试", namespace, name, retryCount), "集群状态更新错误，重试次数达到上限")
+			return fmt.Errorf("[%s:%s]集群状态更新错误，重试次数达到上限%d次，终止重试", namespace, name, retryCount)
 		} else {
 			retryCount++
 			s.Log.V(1).Info(fmt.Sprintf("[%s:%s]集群状态更新未完成，将于%d秒后尝试第%d次重试", namespace, name, STATUS_UPDATE_RETRY_INTERVAL, retryCount))
@@ -676,6 +730,7 @@ func (s *syncHandlerImpl) waitRestorePhaseUpdateComplete(namespace, name string,
 		}
 	}
 }
+
 func (s *syncHandlerImpl) updateClusterStatus(cluster *opengaussv1.OpenGaussCluster) error {
 	if storedCluster, e := s.resourceService.GetCluster(cluster.Namespace, cluster.Name); e != nil {
 		return e
@@ -687,6 +742,7 @@ func (s *syncHandlerImpl) updateClusterStatus(cluster *opengaussv1.OpenGaussClus
 	}
 	return nil
 }
+
 func comparePodStates(expectStates, actualStates map[string]string) bool {
 	for ip, state := range expectStates {
 		actualState, exist := actualStates[ip]

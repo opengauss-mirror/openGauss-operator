@@ -1,0 +1,18 @@
+mode: set
+opengauss-operator/controllers/opengausscluster_controller.go:46.201,57.2 8 0
+opengauss-operator/controllers/opengausscluster_controller.go:73.108,79.16 4 0
+opengauss-operator/controllers/opengausscluster_controller.go:88.2,88.52 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:98.2,100.18 3 0
+opengauss-operator/controllers/opengausscluster_controller.go:103.2,103.47 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:107.2,107.11 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:114.2,114.60 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:119.2,119.110 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:79.16,81.29 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:84.3,84.33 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:81.29,83.4 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:88.52,95.3 3 0
+opengauss-operator/controllers/opengausscluster_controller.go:100.18,102.3 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:103.47,105.3 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:107.11,108.60 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:108.60,110.4 1 0
+opengauss-operator/controllers/opengausscluster_controller.go:114.60,118.3 3 0

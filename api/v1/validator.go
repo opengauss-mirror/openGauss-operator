@@ -14,14 +14,19 @@ package v1
 
 import (
 	"fmt"
-	"path/filepath"
-
 	"opengauss-operator/utils"
+	"path/filepath"
+	"regexp"
 )
 
 const (
-	NODEPORT_MIN = 30000
-	NODEPORT_MAX = 32767
+	NODEPORT_MIN      = 30000
+	NODEPORT_MAX      = 32767
+	OG_OG_PASSWORD    = "og_OG_PASSWORD"
+	OG_MY_POD_IP      = "og_MY_POD_IP"
+	SIDECAR_CR_NAME   = "sidecar_CR_NAME"
+	SIDECAR_MY_POD_IP = "sidecar_MY_POD_IP"
+	CONTAINER_PRIFIX  = `(?i)og_|sidecar_`
 )
 
 func (cluster *OpenGaussCluster) Validate() error {
@@ -39,6 +44,12 @@ func (cluster *OpenGaussCluster) Validate() error {
 		if cluster.Spec.StorageClass != cluster.Status.Spec.StorageClass {
 			errorMessage = append(errorMessage, fmt.Sprintf("属性\"StorageClass\"不支持修改"))
 		}
+		if cluster.Status.Spec.NetworkClass != "" {
+			if cluster.Spec.NetworkClass != cluster.Status.Spec.NetworkClass {
+				errorMessage = append(errorMessage, fmt.Sprintf("属性\"NetworkClass\"不支持修改"))
+			}
+		}
+
 	}
 	role := cluster.Spec.LocalRole
 	if role != "" && role != LOCAL_ROLE_PRIMARY && role != LOCAL_ROLE_STANDBY {
@@ -98,6 +109,23 @@ func (cluster *OpenGaussCluster) Validate() error {
 	if cluster.Spec.HostpathRoot != "" && cluster.Spec.StorageClass != "" {
 		errorMessage = append(errorMessage, fmt.Sprintf("属性\"HostpathRoot\"和\"StorageClass\"不能同时设置"))
 	}
+	annotations := cluster.Spec.Annotations
+	attachmentNetworkVal, attachNetwork := annotations[utils.ATTACHMENT_NETWORK_ANNOTATION]
+	attachNetworkSubnetStr, attachNetworkSubnetName := annotations[utils.ATTACH_NETWORK_LOGICAL_SWITCH_ANNOTATION]
+	if cluster.IsNew() {
+		if cluster.Spec.NetworkClass == "" {
+			errorMessage = append(errorMessage, fmt.Sprintf("属性\"NetworkClass\"不能为空"))
+		} else if cluster.Spec.NetworkClass != NETWORK_CALICO && cluster.Spec.NetworkClass != NETWORK_KUBE_OVN {
+			errorMessage = append(errorMessage, fmt.Sprintf("不支持的网络插件，属性\"NetworkClass\"当前值为\"%s\"", cluster.Spec.NetworkClass))
+		}
+		if cluster.Spec.NetworkClass == NETWORK_KUBE_OVN {
+			_, subnetName := annotations[utils.LOGICAL_SWITCH_ANNOTATION]
+			if !subnetName {
+				errorMessage = append(errorMessage, fmt.Sprintf("当前环境使用的网络插件为kube-ovn,需要指定业务子网名称注解：[%s],附加网卡名称和附加子网名称可选\"Annotations\"", utils.ATTACHMENT_NETWORK_ANNOTATION))
+				errorMessage = append(errorMessage, fmt.Sprintf("[%s,%s]", utils.LOGICAL_SWITCH_ANNOTATION, utils.ATTACH_NETWORK_LOGICAL_SWITCH_ANNOTATION))
+			}
+		}
+	}
 	//基于Hostpath的属性，如本地存储根路径、备份路径、归档路径，都必须是绝对路径
 	if cluster.Spec.HostpathRoot != "" && !filepath.IsAbs(cluster.Spec.HostpathRoot) {
 		errorMessage = append(errorMessage, fmt.Sprintf("属性\"HostpathRoot\"必须是绝对路径"))
@@ -113,12 +141,35 @@ func (cluster *OpenGaussCluster) Validate() error {
 	} else {
 		for _, entry := range cluster.Spec.IpList {
 			if !utils.ValidateIp(entry.Ip) {
-				errorMessage = append(errorMessage, fmt.Sprintf("IP值\"%s\"无效", entry.Ip))
-			} else if entry.NodeName == "" {
-				errorMessage = append(errorMessage, fmt.Sprintf("IP\"%s\"对应的\"NodeName\"值不能为空", entry.Ip))
+				errorMessage = append(errorMessage, fmt.Sprintf("IpNodeEntry的IP值\"%s\"无效", entry.Ip))
 			}
+			if cluster.Spec.NetworkClass == NETWORK_KUBE_OVN {
+				if entry.ExtendIp != "" {
+					if !utils.ValidateIp(entry.ExtendIp) {
+						errorMessage = append(errorMessage, fmt.Sprintf("IpNodeEntry的ExtendIp值\"%s\"无效", entry.ExtendIp))
+					}
+					if !attachNetwork || !attachNetworkSubnetName {
+						errorMessage = append(errorMessage, fmt.Sprintf("当前环境使用的网络插件为kube-ovn,且extendIp不为空，需要指定附加网卡名称和附加子网名称的注解\"Annotations\""))
+						errorMessage = append(errorMessage, fmt.Sprintf("[%s,%s]", utils.ATTACHMENT_NETWORK_ANNOTATION, utils.ATTACH_NETWORK_LOGICAL_SWITCH_ANNOTATION))
+					}
+					if attachNetworkSubnetNameArray, err := utils.GetAttachNetworkLogicSwitchArr(attachNetworkSubnetStr); err != nil || len(attachNetworkSubnetNameArray) != 1 {
+						errorMessage = append(errorMessage, fmt.Sprintf("当前环境使用的网络插件为kube-ovn,附加网卡子网注解不规范，%s 当前值为[%s]", utils.ATTACH_NETWORK_LOGICAL_SWITCH_ANNOTATION, attachNetworkSubnetStr))
+						errorMessage = append(errorMessage, fmt.Sprintf(`%s 注解值示例 :[{"networkname":"network","subnetname":"subnet""}]，当前版本仅支持添加一个附加网卡`, utils.ATTACH_NETWORK_LOGICAL_SWITCH_ANNOTATION))
+					}
+					if _, err := utils.GetAttachNetworkArr(attachmentNetworkVal); err != nil {
+						errorMessage = append(errorMessage, fmt.Sprint("当前环境使用的网络插件为kube-ovn,附加网卡名称注解不规范"))
+						errorMessage = append(errorMessage, fmt.Sprintf(`当前值:[%s],应满足【k8s.v1.cni.cncf.io/networks】k8s.v1.cni.cncf.io/networks: '[{ "name" : "***", "namespace": "***" }]'`, attachmentNetworkVal))
+					}
+				}
+			} else if cluster.Spec.NetworkClass == NETWORK_CALICO {
+				if entry.ExtendIp != "" {
+					errorMessage = append(errorMessage, fmt.Sprintf("当前环境的网络插件为%s,IpNodeEntry的ExtendIp值应为空，当前值为\"%s\" ", NETWORK_CALICO, entry.ExtendIp))
+				}
+			}
+
 		}
 	}
+
 	if len(cluster.Spec.RemoteIpList) > 0 {
 		for _, ip := range cluster.Spec.RemoteIpList {
 			if !utils.ValidateIp(ip) {
@@ -138,6 +189,23 @@ func (cluster *OpenGaussCluster) Validate() error {
 			if internalProps.Contains(key) {
 				errorMessage = append(errorMessage, fmt.Sprintf("数据库配置参数\"%s\"不支持修改", key))
 			}
+		}
+	}
+	reg := regexp.MustCompile(CONTAINER_PRIFIX)
+	for key, _ := range cluster.Spec.CustomizedEnv {
+		if !reg.MatchString(key) {
+			errorMessage = append(errorMessage, fmt.Sprintf("自定义环境变量[%s]命名不符合要求，应以\"containername_\"为前缀", key))
+		}
+		if key == OG_OG_PASSWORD || key == OG_MY_POD_IP || key == SIDECAR_CR_NAME || key == SIDECAR_MY_POD_IP {
+			errorMessage = append(errorMessage, fmt.Sprintf("自定义环境变量[%s]不符合要求，与容器内置环境变量冲突", key))
+		}
+	}
+	if NETWORK_KUBE_OVN != cluster.Spec.NetworkClass {
+		if len(cluster.Spec.Schedule.Nodes) > 0 {
+			errorMessage = append(errorMessage, fmt.Sprintf("当前CR网络插件类型为\"%s\",不支持设置Schedule.Nodes,仅网络插件为kube-ovn的环境支持此设置", cluster.Spec.NetworkClass))
+		}
+		if len(cluster.Spec.Schedule.NodeLabels) > 0 {
+			errorMessage = append(errorMessage, fmt.Sprintf("当前CR网络插件类型为\"%s\",不支持设置Schedule.NodeLabels,仅网络插件为kube-ovn的环境支持此设置", cluster.Spec.NetworkClass))
 		}
 	}
 	if len(errorMessage) != 0 {

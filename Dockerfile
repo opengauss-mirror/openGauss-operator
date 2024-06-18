@@ -32,10 +32,13 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o opengaus
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
-#FROM exploitht/operator-static
-FROM kubeimages/distroless-static
+#operator生成的默认Dockerfile会指定使用distroless做镜像基础文件，但我们无法访问原有的地址，因此需要修改为
+#FROM kubeimages/distroless-static
+FROM exploitht/operator-static
 WORKDIR /
 COPY --from=builder /workspace/opengauss-operator /usr/local/bin/opengauss-operator
 USER 65532:65532
 
 ENTRYPOINT ["/usr/local/bin/opengauss-operator"]
+
+

@@ -19,8 +19,9 @@ import (
 
 // IpNodeEntry defines a ip and name of the node which the ip located
 type IpNodeEntry struct {
-	Ip       string `json:"ip"`
-	NodeName string `json:"nodename"`
+	Ip       string `json:"ip"`                 //pod的IP
+	NodeName string `json:"nodename,omitempty"` //可选字段,calico的网段划分到了每个node上，需要指定node部署
+	ExtendIp string `json:"extendip,omitempty"` //可选字段pod的扩展IP（支持多网卡）
 }
 
 // OpenGaussClusterSpec defines the desired state of OpenGaussCluster
@@ -49,7 +50,11 @@ type OpenGaussClusterSpec struct {
 	ScriptConfig   string            `json:"scriptconfig,omitempty"`   //执行脚本的配置
 	FilebeatConfig string            `json:"filebeatconfig,omitempty"` //Filebeat配置CM
 	RestoreFile    string            `json:"restorefile,omitempty"`    //数据恢复文件
-	Schedule       ScheduleConfig    `json:"schedule,omitempty"`
+	Schedule       ScheduleConfig    `json:"schedule,omitempty"`       //cluster 节点调度配置
+	CustomizedEnv  map[string]string `json:"customizedenv,omitempty"`  //自定义环境变量
+	Annotations    map[string]string `json:"annotations,omitempty"`    //自定义注解
+	Labels         map[string]string `json:"labels,omitempty"`         //自定义标签
+	NetworkClass   string            `json:"networkclass,omitempty"`   //网络插件类型，当前仅支持calico和kube-ovn两种网络插件
 }
 
 type ScheduleConfig struct {
@@ -57,6 +62,12 @@ type ScheduleConfig struct {
 	GracePeriod          int32 `json:"gracePeriod,omitempty"`
 	Toleration           int32 `json:"toleration,omitempty"`
 	MostAvailableTimeout int32 `json:"mostavailabletimeout,omitempty"`
+	//选择可部署的节点
+	Nodes                []string          `json:"nodes,omitempty"`
+	PollingPeriod        int64             `json:"pollingPeriod,omitempty"`        //operator轮训周期
+	LivenessProbePeriod  int32             `json:"livenessProbePeriod,omitempty"`  //og pod的liveness探活周期
+	ReadinessProbePeriod int32             `json:"readinessProbePeriod,omitempty"` //og pod的readiness探活周期
+	NodeLabels           map[string]string `json:"nodelabels,omitempty"`           //Node标签 operator基于标签创建pod时，设置pod的Nodeselector
 }
 
 type OpenGaussClusterState string
@@ -125,8 +136,9 @@ type OpenGaussClusterStatus struct {
 // +kubebuilder:printcolumn:name="Write Port",type="integer",JSONPath=".spec.writeport",description="OpenGaussCluster Write Service Port"
 // +kubebuilder:printcolumn:name="DB Port",type="integer",JSONPath=".spec.dbport",description="OpenGaussCluster DB Port"
 // +kubebuilder:printcolumn:name="State",type="string",JSONPath=".status.state",description="OpenGaussCluster state"
+// +kubebuilder:printcolumn:name="Primary",type="string",JSONPath=".status.primary",description="OpenGaussCluster Primary Instance"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
-
+// +kubebuilder:printcolumn:name="Image",type="string",priority=1,JSONPath=".spec.image",description="OpenGaussCluster Image"
 // OpenGaussCluster is the Schema for the opengaussclusters API
 type OpenGaussCluster struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -136,7 +148,7 @@ type OpenGaussCluster struct {
 	Status OpenGaussClusterStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
+// +kubebuilder:object:root=true
 
 // OpenGaussClusterList contains a list of OpenGaussCluster
 type OpenGaussClusterList struct {

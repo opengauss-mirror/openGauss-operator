@@ -15,28 +15,59 @@ package utils
 import (
 	"encoding/json"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"math"
 	"net"
+	"os"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
-	IP_REG            = `([\d]{1,3})\.([\d]{1,3})\.([\d]{1,3})\.([\d]{1,3})`
-	POD_NAME_EXP      = `pod-([\d]{1,3})`
-	RESOURCE_EXP      = `([0-9.]+)(Ki|K|Mi|Gi|M|G|Ti|T)`
-	DEFAULT_TIMEOUT   = 5
-	RETRY_INTERVAL    = 10
-	RETRY_LIMIT       = 30
-	TIME_FORMAT       = "2006-01-02 15:04:05"
-	DEFAULT_DELIMITER = ","
+	IP_REG                                   = `([\d]{1,3})\.([\d]{1,3})\.([\d]{1,3})\.([\d]{1,3})`
+	POD_NAME_EXP                             = `pod-([\d]{1,3})`
+	RESOURCE_EXP                             = `([0-9.]+)(Ki|K|Mi|Gi|M|G|Ti|T)`
+	DEFAULT_TIMEOUT                          = 5
+	RETRY_INTERVAL                           = 10
+	RETRY_LIMIT                              = 30
+	TIME_FORMAT                              = "2006-01-02 15:04:05"
+	DEFAULT_DELIMITER                        = ","
+	CALICO_IP_ADDRESS_ANNOTATION             = "cni.projectcalico.org/ipAddrs"
+	CALICO_IP_ADDRESS_ANNOTATION_VAL         = "[\"POD_IP\"]"
+	KUBE_OVN_IP_ADDRESS_ANNOTATION           = "ovn.kubernetes.io/ip_address"
+	LOGICAL_SWITCH_ANNOTATION                = "ovn.kubernetes.io/logical_switch"
+	ATTACHMENT_NETWORK_ANNOTATION            = "k8s.v1.cni.cncf.io/networks"
+	LOGICAL_SWITCH_ANNOTATION_TEMPLATE       = "%s.kubernetes.io/logical_switch"
+	IP_ADDRESS_ANNOTATION_TEMPLATE           = "%s.kubernetes.io/ip_address"
+	ATTACH_NETWORK_LOGICAL_SWITCH_ANNOTATION = "attach_logical_switch_array"
+	DEFAULT_TRANSACTION_READ_ONLY_ON         = "on"
+	DEFAULT_TRANSACTION_READ_ONLY_OFF        = "off"
+	K8S_VERSION_KEY                          = "K8S_VERSION"
+	DEFAULT_K8S_VERSION_VAL                  = "1.14"
 )
+
+//附加自定义网络接口结构体定义
+type AttachmentNetwork struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+}
+type AttachmentNetworkSubnet struct {
+	NetworkName string `json:"networkname"`
+	SubnetName  string `json:"subnetname"`
+}
+
+func GetFixedBandWidth(bandWidth string) string {
+	k8sVsersion := os.Getenv(K8S_VERSION_KEY)
+	if DEFAULT_K8S_VERSION_VAL == k8sVsersion {
+		bandWidth = strings.Replace(bandWidth, "G", "T", 1)
+		bandWidth = strings.Replace(bandWidth, "M", "G", 1)
+	}
+	return bandWidth
+}
 
 func IPToIntArray(ip string) []int {
 	array := make([]int, 0)
@@ -232,4 +263,59 @@ func CalculateSyncCount(localCount, remoteCount int) int {
 		count = localCount / 2
 	}
 	return count
+}
+
+/*
+获取附加网卡的配置信息，附加网卡名称和所在命名空间 目前仅支持一个
+*/
+func GetAttachNetworkArr(str string) ([]AttachmentNetwork, error) {
+	var attachNetworkArr []AttachmentNetwork
+	if err := json.Unmarshal([]byte(str), &attachNetworkArr); err == nil {
+		return attachNetworkArr, nil
+	} else {
+		return attachNetworkArr, err
+	}
+}
+
+/*
+获取附加网卡指定的subnetname 目前仅支持一个附加网卡
+*/
+func GetAttachNetworkLogicSwitchArr(str string) ([]AttachmentNetworkSubnet, error) {
+	var attachNetworkLogicSwitchArr []AttachmentNetworkSubnet
+	if err := json.Unmarshal([]byte(str), &attachNetworkLogicSwitchArr); err == nil {
+		return attachNetworkLogicSwitchArr, nil
+	} else {
+		return attachNetworkLogicSwitchArr, err
+	}
+}
+
+/*
+带宽转化为以M为单位的整数
+*/
+func CalculateBandwidthResourceForKubeovn(val string) string {
+	reg := regexp.MustCompile(RESOURCE_EXP)
+	params := reg.FindStringSubmatch(val)
+	v, _ := strconv.ParseFloat(params[1], 64)
+	u := params[2]
+	if strings.Index(u, "G") >= 0 {
+		v = 1000 * v
+	} else if strings.Index(u, "T") >= 0 {
+		v = 1000 * 1000 * v
+	}
+	return strconv.Itoa(int(math.Ceil(v)))
+}
+
+/**
+判断字符串数组中是否包含指定的字符串
+*/
+func ContainsString(strArry []string, targetStr string) bool {
+	if len(strArry) == 0 {
+		return false
+	}
+	for _, s := range strArry {
+		if s == targetStr {
+			return true
+		}
+	}
+	return false
 }

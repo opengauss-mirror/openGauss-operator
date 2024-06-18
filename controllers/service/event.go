@@ -14,6 +14,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -24,29 +25,34 @@ import (
 )
 
 const (
-	REASON_CREATE                 = "Creating"
-	REASON_UPDATE                 = "Updating"
-	REASON_RECOVER                = "Recorvering"
-	REASON_RESTORE                = "restoring"
-	REASON_MAINTAIN_START         = "MaintainStart"
-	REASON_MAINTAIN_COMPLETE      = "MaintainComplete"
-	REASON_READY                  = "Ready"
-	REASON_VALIDATE_FAILED        = "ValidateFail"
-	REASON_VALIDATE_FIX           = "ValidateFix"
-	REASON_SET_PRIMARY            = "SetPrimary"
-	REASON_SET_STANDBY            = "SetStandby"
-	REASON_CONFIGDB_FAIL          = "ConfigDBFail"
-	REASON_RESTORE_FAIL           = "RestoreFail"
-	REASON_BASEBACKUP_FAIL        = "BasebackupFail"
-	REASON_FIX_STANDBY_COMPLETE   = "FixStandbyComplete"
-	REASON_FIX_STANDBY_FAIL       = "FixStandbyFail"
-	REASON_SWITCH_PRIMARY         = "SwitchPrimary"
-	REASON_DELETE_INSTANCE        = "DeleteInstance"
-	REASON_UPGRADE_INSTANCE       = "UpgradeInstance"
-	REASON_INSTANCE_START_TIMEOUT = "InstanceStartTimeout"
-	REASON_SET_MOST_AVAILABLE     = "SetMostAvailable"
-	REASON_CLUSTER_FAILED         = "Failed"
-	DEFAULT_ERROR_MESSAGE         = "unknown"
+	REASON_CREATE                  = "Creating"
+	REASON_UPDATE                  = "Updating"
+	REASON_RECOVER                 = "Recorvering"
+	REASON_RESTORE                 = "restoring"
+	REASON_MAINTAIN_START          = "MaintainStart"
+	REASON_MAINTAIN_COMPLETE       = "MaintainComplete"
+	REASON_READY                   = "Ready"
+	REASON_VALIDATE_FAILED         = "ValidateFail"
+	REASON_VALIDATE_FIX            = "ValidateFix"
+	REASON_SET_PRIMARY             = "SetPrimary"
+	REASON_SET_STANDBY             = "SetStandby"
+	REASON_CONFIGDB_FAIL           = "ConfigDBFail"
+	REASON_RESTORE_FAIL            = "RestoreFail"
+	REASON_BASEBACKUP_FAIL         = "BasebackupFail"
+	REASON_FIX_STANDBY_COMPLETE    = "FixStandbyComplete"
+	REASON_FIX_STANDBY_FAIL        = "FixStandbyFail"
+	REASON_SWITCH_PRIMARY          = "SwitchPrimary"
+	REASON_DELETE_INSTANCE         = "DeleteInstance"
+	REASON_UPGRADE_INSTANCE        = "UpgradeInstance"
+	REASON_INSTANCE_START_TIMEOUT  = "InstanceStartTimeout"
+	REASON_SET_MOST_AVAILABLE      = "SetMostAvailable"
+	REASON_CLUSTER_FAILED          = "Failed"
+	DEFAULT_ERROR_MESSAGE          = "unknown"
+	REASON_SERVICE_FAILED          = "ServiceFail"
+	REASON_SET_DEFAULT_TRANSACTION = "SetDefaultTransaction"
+	REASON_START_POD               = "StartPodFail"
+	REASON_BUILD_FAIL              = "PodBuildFail"
+	REASON_BUILD_STANDBY_COMPLETE  = "PodBuildComplete"
 )
 
 type EventService interface {
@@ -66,12 +72,18 @@ type EventService interface {
 	InstanceConfigFail(cluster *opengaussv1.OpenGaussCluster, ip string, err error)
 	InstanceRestoreFail(cluster *opengaussv1.OpenGaussCluster, ip string)
 	InstanceBasebackupFail(cluster *opengaussv1.OpenGaussCluster, ip string)
+	InstanceBuildFail(cluster *opengaussv1.OpenGaussCluster, ip string)
+	InstanceBuildComplete(cluster *opengaussv1.OpenGaussCluster, ip, state string)
 	FixStandbyComplete(cluster *opengaussv1.OpenGaussCluster, ip, state string)
 	FixStandbyFail(cluster *opengaussv1.OpenGaussCluster, ip, state string)
 	InstanceDelete(cluster *opengaussv1.OpenGaussCluster, ip string)
 	InstanceUpgrade(cluster *opengaussv1.OpenGaussCluster, ip string)
 	InstanceTimeout(cluster *opengaussv1.OpenGaussCluster, ip string)
 	ConfigureMostAvailable(cluster *opengaussv1.OpenGaussCluster, enable bool)
+	ConfigureDefaultTransactionReadOnly(cluster *opengaussv1.OpenGaussCluster, currVal string)
+	InstanceStartFail(cluster *opengaussv1.OpenGaussCluster, ip, message string)
+	RecordNotNormalStandby(cluster *opengaussv1.OpenGaussCluster, ip, state string)
+	RecoverPrimaryFail(cluster *opengaussv1.OpenGaussCluster, message string)
 }
 
 type eventService struct {
@@ -159,6 +171,12 @@ func (e *eventService) InstanceBasebackupFail(cluster *opengaussv1.OpenGaussClus
 	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeWarning, REASON_BASEBACKUP_FAIL, fmt.Sprintf("%s 实例%s复制数据失败，将于清理后重试", time.Now().Format(utils.TIME_FORMAT), ip))
 }
 
+func (e *eventService) InstanceBuildFail(cluster *opengaussv1.OpenGaussCluster, ip string) {
+	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeWarning, REASON_BUILD_FAIL, fmt.Sprintf("%s 实例%s Build失败，", time.Now().Format(utils.TIME_FORMAT), ip))
+}
+func (e *eventService) InstanceBuildComplete(cluster *opengaussv1.OpenGaussCluster, ip, state string) {
+	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeNormal, REASON_BUILD_STANDBY_COMPLETE, fmt.Sprintf("%s 实例%sBuild完成，实例状态为:%s", time.Now().Format(utils.TIME_FORMAT), ip, state))
+}
 func (e *eventService) FixStandbyComplete(cluster *opengaussv1.OpenGaussCluster, ip, state string) {
 	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeNormal, REASON_FIX_STANDBY_COMPLETE, fmt.Sprintf("%s 重启修复实例%s完成，实例状态是%s", time.Now().Format(utils.TIME_FORMAT), ip, state))
 }
@@ -185,4 +203,18 @@ func (e *eventService) ConfigureMostAvailable(cluster *opengaussv1.OpenGaussClus
 		val = PARAM_VALUE_ON
 	}
 	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeNormal, REASON_SET_MOST_AVAILABLE, fmt.Sprintf("%s 设置最大可用为\"%s\"", time.Now().Format(utils.TIME_FORMAT), val))
+}
+func (e *eventService) ConfigureDefaultTransactionReadOnly(cluster *opengaussv1.OpenGaussCluster, currVal string) {
+	if strings.Contains(currVal, PARAM_VALUE_ON) {
+		e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeNormal, REASON_SET_DEFAULT_TRANSACTION, fmt.Sprintf("%s Data pvc使用达到阈值（95%s) 设置DEFAULT_TRANSACTION_READ_ONLY为ON", time.Now().Format(utils.TIME_FORMAT), "%"))
+	}
+}
+func (e *eventService) InstanceStartFail(cluster *opengaussv1.OpenGaussCluster, ip, message string) {
+	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeWarning, REASON_START_POD, fmt.Sprintf("%sPod%s启动失败,reason:%s", time.Now().Format(utils.TIME_FORMAT), ip, message))
+}
+func (e *eventService) RecordNotNormalStandby(cluster *opengaussv1.OpenGaussCluster, ip, state string) {
+	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeWarning, REASON_CONFIGDB_FAIL, fmt.Sprintf("%sPod%s实例状态异常，非normal状态:%s", time.Now().Format(utils.TIME_FORMAT), ip, state))
+}
+func (e *eventService) RecoverPrimaryFail(cluster *opengaussv1.OpenGaussCluster, message string) {
+	e.eventsCli.Event(cluster.DeepCopyObject(), corev1.EventTypeWarning, REASON_START_POD, message)
 }

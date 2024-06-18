@@ -27,6 +27,14 @@ rules:
   - patch
   - delete
 - apiGroups:
+  - ""
+  resources:
+  - configmaps/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
   - coordination.k8s.io
   resources:
   - leases

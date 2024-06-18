@@ -14,9 +14,9 @@ package v1
 
 import (
 	"fmt"
-	"strings"
-
 	"opengauss-operator/utils"
+	"reflect"
+	"strings"
 )
 
 const (
@@ -110,9 +110,14 @@ func (in *OpenGaussCluster) IsRestoreChange() bool {
 func (in *OpenGaussCluster) RestoreRequired() bool {
 	return in.GetValidSpec().RestoreFile != "" && in.Status.RestorePhase != RestorePhaseSucceeded
 }
+
 func (in *OpenGaussCluster) RestoreComplete() bool {
 	return in.IsRestoreChange() && in.Status.RestorePhase == RestorePhaseSucceeded
 }
+
+/*
+集群的 pod主ip是否改变
+*/
 func (in *OpenGaussCluster) IsIpListChange() bool {
 	if in.IsNew() {
 		return false
@@ -199,6 +204,10 @@ func (in *OpenGaussClusterSpec) serviceChange(another *OpenGaussClusterSpec) boo
 	return false
 }
 
+/*
+判断cluster的Image，SidecarImage，Cpu,Memory，BandWidth，SidecarCpu，SidecarMemory，BackupPath，ArchiveLogPath
+ScriptConfig，FilebeatConfig，CustomizedEnv是否发生变化
+*/
 func (in *OpenGaussClusterSpec) containerChange(another *OpenGaussClusterSpec) bool {
 	if in.Image != another.Image {
 		return true
@@ -233,6 +242,17 @@ func (in *OpenGaussClusterSpec) containerChange(another *OpenGaussClusterSpec) b
 	if in.FilebeatConfig != another.FilebeatConfig {
 		return true
 	}
+	// 比较自定义环境变量是否发生变化
+	if !utils.CompareMaps(in.CustomizedEnv, another.CustomizedEnv) {
+		return true
+	}
+	// 比较liveness和readiness探针周期是否改变
+	if in.Schedule.LivenessProbePeriod != another.Schedule.LivenessProbePeriod {
+		return true
+	}
+	if in.Schedule.ReadinessProbePeriod != another.Schedule.ReadinessProbePeriod {
+		return true
+	}
 	return false
 }
 
@@ -240,6 +260,9 @@ func (in *OpenGaussClusterSpec) roleChange(another *OpenGaussClusterSpec) bool {
 	return in.LocalRole != another.LocalRole
 }
 
+/*
+校验资源是否发生变化 ，包括container，storage，service，iplist，
+*/
 func (in *OpenGaussClusterSpec) resourceChange(another *OpenGaussClusterSpec) bool {
 	if in.containerChange(another) {
 		return true
@@ -250,12 +273,21 @@ func (in *OpenGaussClusterSpec) resourceChange(another *OpenGaussClusterSpec) bo
 	if in.serviceChange(another) {
 		return true
 	}
-	if in.ipListChange(another) {
+	if in.ipNodeListChange(another) {
+		return true
+	}
+	if in.annotationChange(another) {
+		return true
+	}
+	if in.labelChange(another) {
 		return true
 	}
 	return false
 }
 
+/*
+集群的 pod主ip是否改变
+*/
 func (in *OpenGaussClusterSpec) ipListChange(another *OpenGaussClusterSpec) bool {
 	if len(in.IpList) != len(another.IpList) {
 		return true
@@ -267,6 +299,25 @@ func (in *OpenGaussClusterSpec) ipListChange(another *OpenGaussClusterSpec) bool
 		}
 	}
 	return false
+}
+
+/*
+集群的 IpNodeEntry是否改变，包括Ip,NodeName和ExtendIp
+*/
+func (in *OpenGaussClusterSpec) ipNodeListChange(another *OpenGaussClusterSpec) bool {
+	if len(in.IpList) != len(another.IpList) {
+		return true
+	} else {
+		specIpEntryMap := make(map[string]IpNodeEntry, 0)
+		anotherIpEntryMap := make(map[string]IpNodeEntry, 0)
+		for _, ipNode := range in.IpList {
+			specIpEntryMap[ipNode.Ip] = ipNode
+		}
+		for _, ipNode := range another.IpList {
+			anotherIpEntryMap[ipNode.Ip] = ipNode
+		}
+		return !reflect.DeepEqual(specIpEntryMap, anotherIpEntryMap)
+	}
 }
 
 func (in *OpenGaussClusterSpec) Equals(another *OpenGaussClusterSpec) bool {
@@ -355,9 +406,59 @@ func (in *OpenGaussCluster) GetServiceName(write bool) string {
 func (in *OpenGaussCluster) GetSecretName() string {
 	return fmt.Sprintf("%s-init-sc", in.Name)
 }
+
 func (in ScheduleConfig) Equals(another ScheduleConfig) bool {
 	return in.ProcessTimeout == another.ProcessTimeout &&
 		in.GracePeriod == another.GracePeriod &&
 		in.Toleration == another.Toleration &&
-		in.MostAvailableTimeout == another.MostAvailableTimeout
+		in.MostAvailableTimeout == another.MostAvailableTimeout &&
+		in.PollingPeriod == another.PollingPeriod &&
+		in.LivenessProbePeriod == another.LivenessProbePeriod &&
+		in.ReadinessProbePeriod == another.ReadinessProbePeriod &&
+		utils.CompareMaps(in.NodeLabels, another.NodeLabels)
+}
+func (in *OpenGaussClusterSpec) annotationChange(another *OpenGaussClusterSpec) bool {
+	return !utils.CompareMaps(in.Annotations, another.Annotations)
+}
+
+func (in *OpenGaussClusterSpec) labelChange(another *OpenGaussClusterSpec) bool {
+	return !utils.CompareMaps(in.Labels, another.Labels)
+}
+
+func (cluster *OpenGaussCluster) IsAnnotationChange() bool {
+	if cluster.IsNew() {
+		return false
+	}
+	lastSpec := cluster.Status.Spec.DeepCopy()
+	currSpec := cluster.GetValidSpec()
+	return currSpec.annotationChange(lastSpec)
+}
+
+func (cluster *OpenGaussCluster) IsLabelChange() bool {
+	if cluster.IsNew() {
+		return false
+	}
+	lastSpec := cluster.Status.Spec.DeepCopy()
+	currSpec := cluster.GetValidSpec()
+	return currSpec.labelChange(lastSpec)
+}
+func (cluster *OpenGaussCluster) IsBandwidthChange() bool {
+	if cluster.IsNew() {
+		return false
+	}
+	lastSpec := cluster.Status.Spec.DeepCopy()
+	currSpec := cluster.GetValidSpec()
+	return currSpec.BandWidth != lastSpec.BandWidth
+}
+
+func (in *OpenGaussCluster) GetPodIpByPodName(podName string) string {
+	pos := strings.LastIndex(podName, "-pod-")
+	return strings.Replace(podName[pos+5:], "x", ".", -1)
+}
+func (in *OpenGaussCluster) GetIpExtendIpMap() map[string]string {
+	IpExtendIpMap := make(map[string]string)
+	for _, entry := range in.Spec.IpList {
+		IpExtendIpMap[entry.Ip] = entry.ExtendIp
+	}
+	return IpExtendIpMap
 }

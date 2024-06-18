@@ -14,6 +14,8 @@ package utils
 
 import (
 	"bytes"
+	"fmt"
+	"github.com/go-logr/logr"
 	"strings"
 	"time"
 
@@ -39,6 +41,7 @@ type Executor struct {
 	Namespace  string
 	PodName    string
 	Container  string
+	Log        logr.Logger
 }
 
 /*
@@ -60,13 +63,14 @@ func NewExecutor() Executor {
 /*
 选取执行命令的容器
 */
-func (e *Executor) Select(namespace, podName, container string) *Executor {
+func (e *Executor) Select(namespace, podName, container string, logger logr.Logger) *Executor {
 	exec := &Executor{
 		KubeConfig: e.KubeConfig,
 		KubeClient: e.KubeClient,
 		Namespace:  namespace,
 		PodName:    podName,
 		Container:  container,
+		Log:        logger,
 	}
 
 	return exec
@@ -103,11 +107,16 @@ func (e *Executor) Exec(command string) (string, string, error) {
 		return "", "", err
 	}
 	for i := 0; i < EXE_RETRY_LIMIT; i++ {
+		beforeExecCommand := time.Now()
 		err = exec.Stream(remotecommand.StreamOptions{
 			Stdin:  nil,
 			Stdout: &stdout,
 			Stderr: &stderr,
 		})
+		afterExecCommand := time.Now()
+		if afterExecCommand.Sub(beforeExecCommand).Seconds() > 10 && strings.Contains(command, "timeout 10s") {
+			e.Log.Error(err, fmt.Sprintf("[%s]下的pod[%s]执行命令：%s 超过10s，认为超时，执行命令失败", e.Namespace, e.PodName, command))
+		}
 		if err != nil {
 			time.Sleep(time.Second * EXE_RETRY_INTERVAL)
 		} else {

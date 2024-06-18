@@ -8,7 +8,7 @@ kind: OpenGaussCluster
 metadata:
   name: ogt
 spec:
-  image: opengauss.sig/opengauss/container:2.0.0.v6
+  image: opengauss-5.0.2:latest
   readport: 30001
   writeport: 30002
   localrole: primary
@@ -56,7 +56,7 @@ metadata:
 spec:
   cpu: 500m
   dbport: 5432
-  image: opengauss.sig/opengauss/container:2.0.0.v7
+  image: opengauss-5.0.2:latest
   memory: 2Gi
   storage: 5Gi
   storageclass: topolvm-provisioner
@@ -147,7 +147,7 @@ metadata:
 spec:
   cpu: 500m
   dbport: 5432
-  image: opengauss.sig/opengauss/container:2.0.0.v7
+  image: opengauss-5.0.2:latest
   memory: 2Gi
   storage: 5Gi
   storageclass: topolvm-provisioner

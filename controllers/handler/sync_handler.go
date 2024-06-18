@@ -13,6 +13,7 @@ See the Mulan PSL v2 for more details.
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -38,22 +39,20 @@ type SyncHandler interface {
 }
 
 type syncHandlerImpl struct {
-	client             client.Client
-	Log                logr.Logger
-	resourceService    service.IResourceService
-	dbService          service.IDBService
-	eventService       service.EventService
-	ensureStatusUpdate bool
+	client          client.Client
+	Log             logr.Logger
+	resourceService service.IResourceService
+	dbService       service.IDBService
+	eventService    service.EventService
 }
 
-func NewSyncHandler(client client.Client, logger logr.Logger, eventRecorder record.EventRecorder, ensureStatusUpdate bool) SyncHandler {
+func NewSyncHandler(client client.Client, logger logr.Logger, eventRecorder record.EventRecorder) SyncHandler {
 	return &syncHandlerImpl{
-		client:             client,
-		Log:                logger,
-		resourceService:    service.NewResourceService(client, logger),
-		dbService:          service.NewDBService(client, logger),
-		eventService:       service.NewEventService(eventRecorder),
-		ensureStatusUpdate: ensureStatusUpdate,
+		client:          client,
+		Log:             logger,
+		resourceService: service.NewResourceService(client, logger, eventRecorder),
+		dbService:       service.NewDBService(client, logger),
+		eventService:    service.NewEventService(eventRecorder),
 	}
 }
 
@@ -78,6 +77,7 @@ func (s *syncHandlerImpl) SyncCluster(cluster *opengaussv1.OpenGaussCluster) err
 			return err
 		}
 		if err := s.resourceService.EnsureServices(cluster); err != nil {
+			s.eventService.ClusterFailed(cluster, err)
 			s.setCondition(cluster, opengaussv1.OpenGaussClusterResourceReady, corev1.ConditionFalse, err.Error())
 			s.updateStatus(cluster, cluster.Status.State, "", err.Error(), false)
 			return err
@@ -87,6 +87,7 @@ func (s *syncHandlerImpl) SyncCluster(cluster *opengaussv1.OpenGaussCluster) err
 			return err
 		}
 	}
+
 	s.Log.Info(fmt.Sprintf("[%s:%s]集群处理完成", cluster.Namespace, cluster.Name))
 	return nil
 }
@@ -117,6 +118,7 @@ func (s *syncHandlerImpl) ensureDBCluster(cluster *opengaussv1.OpenGaussCluster)
 		s.Log.Info(fmt.Sprintf("[%s:%s]集群维护模式结束", cluster.Namespace, cluster.Name))
 		s.eventService.ClusterMaintainComplete(cluster)
 	}
+
 	if e := s.ensureSpecCluster(cluster); e != nil {
 		s.setCondition(cluster, opengaussv1.OpenGaussClusterResourceReady, corev1.ConditionFalse, e.Error())
 		s.setCondition(cluster, opengaussv1.OpenGaussClusterInstancesReady, corev1.ConditionFalse, e.Error())
@@ -124,6 +126,7 @@ func (s *syncHandlerImpl) ensureDBCluster(cluster *opengaussv1.OpenGaussCluster)
 	} else {
 		s.setCondition(cluster, opengaussv1.OpenGaussClusterServiceReady, corev1.ConditionTrue, "")
 	}
+
 	if e := s.cleanupCluster(cluster); e != nil {
 		s.setCondition(cluster, opengaussv1.OpenGaussClusterResourceReady, corev1.ConditionFalse, e.Error())
 		return e
@@ -148,9 +151,12 @@ func (s *syncHandlerImpl) ensureDBCluster(cluster *opengaussv1.OpenGaussCluster)
 			s.setCondition(cluster, opengaussv1.OpenGaussClusterInstancesReady, corev1.ConditionTrue, "")
 		}
 	}
+
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]数据库集群处理完成", cluster.Namespace, cluster.Name))
 	if cluster.IsValid() {
-		s.updateStatus(cluster, opengaussv1.OpenGaussClusterStateReady, "", "", true)
+		if err := s.updateStatus(cluster, opengaussv1.OpenGaussClusterStateReady, "", "", true); err != nil {
+			return err
+		}
 		s.eventService.ClusterReady(cluster)
 	}
 	return nil
@@ -210,6 +216,12 @@ func (s *syncHandlerImpl) ensurePrimary(cluster *opengaussv1.OpenGaussCluster, p
 		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]主节点位于Pod %s", cluster.Namespace, cluster.Name, primaryPods[0].Name))
 		primaryPod := primaryPods[0]
 		cluster.Status.Primary = primaryPod.Status.PodIP
+		if usageRate, err := s.dbService.QueryDatadirStorageUsage(&primaryPod, cluster.Name); err == nil {
+			s.dbService.IsExceedStorageThreshold(&primaryPod, usageRate)
+		} else {
+			s.dbService.SetDefaultTransactionReadOnly(&primaryPod, utils.DEFAULT_TRANSACTION_READ_ONLY_OFF)
+		}
+		//cr的iplist和remoteiplist是否改变
 		if cluster.IsIpListChange() || cluster.IsRemoteIpListChange() {
 			_, ok, err := s.configDBInstance(cluster, &primaryPod, ipArray, true, true, false)
 			if !ok {
@@ -233,7 +245,7 @@ func (s *syncHandlerImpl) ensurePrimary(cluster *opengaussv1.OpenGaussCluster, p
 方法参数：
 	cluster：当前CR
 */
-func (s *syncHandlerImpl) updatePodLabels(cluster *opengaussv1.OpenGaussCluster) error {
+func (s *syncHandlerImpl) updatePodLabels(cluster *opengaussv1.OpenGaussCluster, ipArray []string) error {
 	// update read/write label for each pod
 	pods, _ := s.resourceService.FindPodsByCluster(cluster, false)
 	for _, pod := range pods {
@@ -247,6 +259,10 @@ func (s *syncHandlerImpl) updatePodLabels(cluster *opengaussv1.OpenGaussCluster)
 		if err != nil {
 			s.Log.Error(err, fmt.Sprintf("[%s:%s]查询位于Pod %s的数据库状态，发生错误", cluster.Namespace, cluster.Name, pod.Name))
 			continue
+		}
+		success, err := s.dbService.ConfigSyncParams(cluster, &pod, ipArray)
+		if !success || err != nil {
+			return fmt.Errorf("[%s:%s]在Pod %s上配置数据实例synchronous_standby_names与most_available_sync参数，发生错误", cluster.Namespace, cluster.Name, pod.Name)
 		}
 		if err := s.addRoleLabelToPod(cluster, pod.Status.PodIP, dbstate.IsPrimary()); err != nil {
 			return err
@@ -277,6 +293,7 @@ func (s *syncHandlerImpl) updatePodLabels(cluster *opengaussv1.OpenGaussCluster)
 */
 func (s *syncHandlerImpl) processMultiplePrimary(cluster *opengaussv1.OpenGaussCluster, primaryPods []corev1.Pod, ipArray []string) error {
 	s.Log.Info(fmt.Sprintf("[%s:%s]检测到多个数据库主节点", cluster.Namespace, cluster.Name))
+
 	if cluster.IsPrimary() {
 		matchWithStatus := false
 		//查看是否有Pod的IP与CR.Status.Primary相同
@@ -288,13 +305,14 @@ func (s *syncHandlerImpl) processMultiplePrimary(cluster *opengaussv1.OpenGaussC
 		}
 		//没有IP与CR.Status.Primary相同的Pod，从现有的Priamry中选择LSN最大的一个
 		if !matchWithStatus {
-			maxLsnPod := s.dbService.FindPodWithLargestLSN(primaryPods, "")
+			maxLsnPod := s.dbService.FindPodWithLargestLSN(primaryPods, "", cluster.Status.SyncStates)
 			cluster.Status.Primary = maxLsnPod.Status.PodIP
 		}
 	} else {
 		//对于同城集群，Status.Primary应为空
 		cluster.Status.Primary = ""
 	}
+
 	//清理多主
 	for _, primaryPod := range primaryPods {
 		if primaryPod.Status.PodIP != cluster.Status.Primary {
@@ -310,8 +328,11 @@ func (s *syncHandlerImpl) processMultiplePrimary(cluster *opengaussv1.OpenGaussC
 				// 同城集群，通常场景为主备集群切换
 				// 将原主重启为standby，可能发生因无主而进入“need repair”状态
 				// 待原备集群切换为主集群，选出新主节点后，所有节点即可恢复正常
-				s.dbService.RestartStandby(&primaryPod)
+				//同城切换，在原主上设置og集群的default_transaction_read_only为on，不允许写，主切到同城集群后，在设置为off
+				s.dbService.SetDefaultTransactionReadOnly(&primaryPod, utils.DEFAULT_TRANSACTION_READ_ONLY_ON)
+				s.dbService.RestartStandby(cluster, &primaryPod)
 			}
+
 		} else if cluster.IsIpListChange() || cluster.IsRemoteIpListChange() {
 			_, ok, err := s.configDBInstance(cluster, &primaryPod, ipArray, true, true, true)
 			if !ok {
@@ -319,6 +340,7 @@ func (s *syncHandlerImpl) processMultiplePrimary(cluster *opengaussv1.OpenGaussC
 			}
 		}
 	}
+
 	if cluster.IsPrimary() {
 		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]保持位于Pod %s的数据库实例为主节点", cluster.Namespace, cluster.Name, cluster.Status.Primary))
 	} else {
@@ -343,7 +365,8 @@ func (s *syncHandlerImpl) processMultiplePrimary(cluster *opengaussv1.OpenGaussC
 */
 func (s *syncHandlerImpl) processNoPrimary(cluster *opengaussv1.OpenGaussCluster, pods []corev1.Pod, ipArray []string, newPVCPods utils.Set) error {
 	s.Log.Info(fmt.Sprintf("[%s:%s]当前数据库实例中没有主节点", cluster.Namespace, cluster.Name))
-
+	oldPrimaryIp := cluster.Status.Primary
+	selectedPod := corev1.Pod{}
 	standbyPods := make([]corev1.Pod, 0)
 	otherPods := make([]corev1.Pod, 0)
 	stateMap := make(map[string]utils.DBState)
@@ -352,6 +375,11 @@ func (s *syncHandlerImpl) processNoPrimary(cluster *opengaussv1.OpenGaussCluster
 			continue
 		} else {
 			stateMap[pod.Status.PodIP] = dbstate
+			if oldPrimaryIp != "" && pod.Status.PodIP == oldPrimaryIp {
+				s.Log.V(1).Info(fmt.Sprintf("[%s:%s]cluster.Status.Primary 为:%s，尝试将原主拉起", cluster.Namespace, cluster.Name, oldPrimaryIp))
+				selectedPod = pod
+				continue
+			}
 			if dbstate.IsStandby() {
 				standbyPods = append(standbyPods, pod)
 			} else {
@@ -363,20 +391,81 @@ func (s *syncHandlerImpl) processNoPrimary(cluster *opengaussv1.OpenGaussCluster
 	if len(otherPods) > 0 {
 		for _, pod := range otherPods {
 			if !newPVCPods.Contains(pod.Status.PodIP) {
-				if _, started := s.dbService.StartDBToStandby(&pod); started {
+				if _, started := s.dbService.StartDBToStandby(cluster, &pod); started {
 					standbyPods = append(standbyPods, pod)
 				}
 			}
 		}
 	}
-	selectedPod := corev1.Pod{}
-	if len(standbyPods) > 0 {
-		selectedPod = s.dbService.FindPodWithLargestLSN(standbyPods, cluster.Status.Primary)
-	} else {
-		selectedPod = pods[0]
+	// 集群原primary pod状态为running，尝试将其恢复
+	if selectedPod.Status.PodIP != "" {
+		//查询实例的postgres.conf的Replconninfo1，原主Replconninfo1必不为空，如果为空，不能将其设置为主
+		startToPrimary, _ := s.dbService.QueryReplconninfo1(&selectedPod, cluster.Name, selectedPod.Status.PodIP)
+		// start it to primary
+		if startToPrimary {
+			_, ok, _ := s.configDBInstance(cluster, &selectedPod, ipArray, true, true, true)
+			if ok {
+				s.Log.Info(fmt.Sprintf("[%s:%s]原主Pod %s的实例恢复为主节点", cluster.Namespace, cluster.Name, selectedPod.Name))
+				cluster.Status.Primary = selectedPod.Status.PodIP
+				if usageRate, err := s.dbService.QueryDatadirStorageUsage(&selectedPod, cluster.Name); err == nil {
+					s.dbService.IsExceedStorageThreshold(&selectedPod, usageRate)
+				} else {
+					s.dbService.SetDefaultTransactionReadOnly(&selectedPod, utils.DEFAULT_TRANSACTION_READ_ONLY_OFF)
+				}
+				return nil
+			} else {
+				recoverPrimaryMsg := fmt.Sprintf("[%s:%s]原主Pod %s的实例恢复为主节点失败，重新选主", cluster.Namespace, cluster.Name, selectedPod.Name)
+				s.Log.Info(recoverPrimaryMsg)
+				s.eventService.RecoverPrimaryFail(cluster, recoverPrimaryMsg)
+				//return fmt.Errorf("[%s:%s]未能配置位于Pod %s的实例为主节点", cluster.Namespace, cluster.Name, selectedPod.Name)
+			}
+		}
+
 	}
-	if s.checkStandbySyncState(cluster, selectedPod.Status.PodIP) {
+	if oldPrimaryIp != "" && selectedPod.Status.PodIP == "" {
+		s.Log.Error(fmt.Errorf("[%s:%s]cluster.Status.Primary 为:%s, 原主的pod为非Running无法拉起,选择LSN最大的Sync从切为新主", cluster.Namespace, cluster.Name, oldPrimaryIp), "")
+	}
+	syncStateArr := cluster.Status.SyncStates
+	syncStatesStr, _ := json.Marshal(syncStateArr)
+	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]on %s Sync State is [%v]", cluster.Namespace, cluster.Name, cluster.Status.LastUpdateTime, string(syncStatesStr)))
+	syncStandbyStateArr := make([]opengaussv1.SyncState, 0)
+	syncStandbyPodArr := make([]corev1.Pod, 0)
+	if !cluster.IsNew() {
+		syncStandbyStateArr, syncStandbyPodArr = s.getSyncStandby(syncStateArr, standbyPods)
+		syncStandbyStateArrStr, _ := json.Marshal(syncStandbyStateArr)
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]on %s Sync standby State is [%v] \nSync standby Pod个数为: %d", cluster.Namespace, cluster.Name, cluster.Status.LastUpdateTime,
+			string(syncStandbyStateArrStr), len(syncStandbyPodArr)))
+	}
+	if len(syncStandbyStateArr) > 0 && len(syncStandbyPodArr) > 0 || cluster.IsNew() || cluster.IsRoleChange() {
+		if cluster.IsNew() {
+			s.Log.V(1).Info(fmt.Sprintf("[%s:%s]新建cluster,启动的pod个数为%d", cluster.Namespace, cluster.Name, len(pods)))
+			//新建的pod，状态都是pending，选择第一个pod作为主
+			selectedPod = pods[0]
+		} else {
+			if cluster.IsRoleChange() {
+				s.Log.Info(fmt.Sprintf("[%s:%s]openGauss集群角色发生变化，LocalRole is %s，当前集群由同城变为本地", cluster.Namespace, cluster.Name, cluster.Spec.LocalRole))
+				selectedPod = s.dbService.FindPodWithLargestLSN(standbyPods, "", syncStandbyStateArr)
+			} else {
+				if len(syncStandbyPodArr) == 1 {
+					selectedPod = syncStandbyPodArr[0]
+				} else {
+					selectedPod = s.dbService.FindPodWithLargestLSN(syncStandbyPodArr, "", syncStandbyStateArr)
+				}
+			}
+		}
 		s.Log.Info(fmt.Sprintf("[%s:%s]位于Pod %s的实例被选为主节点", cluster.Namespace, cluster.Name, selectedPod.Name))
+		//无主状态，设置og集群的default_transaction_read_only为on
+		//两种情况，1.单实例的无主状态；2.同城集群角色变化，由standby变为primary
+		//查询所选主的data pvc使用率，判断所选主的data pvc使用率是否达到阈值（95%)，如果大于95%，设置集群为只读模式
+		selectedPodDbstate, _ := s.dbService.CheckDBState(&selectedPod)
+		if selectedPodDbstate.IsStandby() && !cluster.IsNew() {
+			if usageRate, err := s.dbService.QueryDatadirStorageUsage(&selectedPod, cluster.Name); err == nil {
+				s.dbService.IsExceedStorageThreshold(&selectedPod, usageRate)
+			} else {
+				s.dbService.SetDefaultTransactionReadOnly(&selectedPod, utils.DEFAULT_TRANSACTION_READ_ONLY_OFF)
+			}
+		}
+
 		// start it to primary
 		_, ok, _ := s.configDBInstance(cluster, &selectedPod, ipArray, true, true, true)
 		if ok {
@@ -387,7 +476,7 @@ func (s *syncHandlerImpl) processNoPrimary(cluster *opengaussv1.OpenGaussCluster
 			return fmt.Errorf("[%s:%s]未能配置位于Pod %s的实例为主节点", cluster.Namespace, cluster.Name, selectedPod.Name)
 		}
 	} else {
-		err := fmt.Errorf("[%s:%s]选择的实例%s数据不完整，不能配置为主节点", cluster.Namespace, cluster.Name, selectedPod.Status.PodIP)
+		err := fmt.Errorf("[%s:%s]集群下没有Sync从，无法在从库中选择新主", cluster.Namespace, cluster.Name)
 		s.eventService.ClusterFailed(cluster, err)
 		s.updateStatus(cluster, opengaussv1.OpenGaussClusterStateFailed, "", err.Error(), false)
 		return err
@@ -408,6 +497,7 @@ func (s *syncHandlerImpl) processNoPrimary(cluster *opengaussv1.OpenGaussCluster
 */
 func (s *syncHandlerImpl) ensureSpecCluster(cluster *opengaussv1.OpenGaussCluster) error {
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]开始根据规约维护集群", cluster.Namespace, cluster.Name))
+
 	// ensure PVC and Pod for each IpNodeEntry
 	// if there is storage change
 	// PVC will be modified
@@ -439,12 +529,13 @@ func (s *syncHandlerImpl) ensureSpecCluster(cluster *opengaussv1.OpenGaussCluste
 	//	否则以可用pod组成集群
 	if !ok {
 		if len(pods) == 0 {
+			s.Log.Error(fmt.Errorf("[%s:%s]没有可用的Pod，进程终止", cluster.Namespace, cluster.Name), "")
 			return fmt.Errorf("[%s:%s]没有可用的Pod，进程终止", cluster.Namespace, cluster.Name)
 		} else {
 			s.Log.Info(fmt.Sprintf("[%s:%s]节点数目未达到预期，将以%d个节点组建集群", cluster.Namespace, cluster.Name, len(pods)))
 		}
 	}
-
+	//获取当前cr spec中的ipset
 	ipSet := cluster.GetValidSpec().IpSet()
 	for _, pod := range pods {
 		ipSet.Add(pod.Status.PodIP)
@@ -467,7 +558,7 @@ func (s *syncHandlerImpl) ensureSpecCluster(cluster *opengaussv1.OpenGaussCluste
 		return err
 	}
 	//更新PodLabel
-	if err := s.updatePodLabels(cluster); err != nil {
+	if err := s.updatePodLabels(cluster, ipArr); err != nil {
 		return err
 	}
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]根据规约维护集群结束", cluster.Namespace, cluster.Name))
@@ -505,6 +596,7 @@ func (s *syncHandlerImpl) restoreDataFromFile(cluster *opengaussv1.OpenGaussClus
 		return fmt.Errorf("[%s:%s]在Pod %s上复制数据失败", cluster.Namespace, cluster.Name, primaryPod.Name)
 	}
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]位于Pod %s上的实例完成配置", cluster.Namespace, cluster.Name, primaryPod.Name))
+
 	pods, err := s.resourceService.FindPodsByCluster(cluster, false)
 	if err != nil {
 		return err
@@ -526,6 +618,7 @@ func (s *syncHandlerImpl) restoreDataFromFile(cluster *opengaussv1.OpenGaussClus
 			newPvcPods.Add(entry.Ip)
 		}
 	}
+
 	s.setRestorePhase(cluster, opengaussv1.RestorePhaseSucceeded)
 	s.eventService.ClusterRestore(cluster)
 	return nil
@@ -544,8 +637,8 @@ func (s *syncHandlerImpl) getSyncPods(cluster *opengaussv1.OpenGaussCluster, pod
 		if state.State == OG_SYNC_STATE_SYNC {
 			syncSet.Add(state.IP)
 		}
-
 	}
+
 	for _, pod := range pods {
 		podIP := pod.Status.PodIP
 		if podIP == cluster.Status.Primary || syncSet.Contains(podIP) {
@@ -573,6 +666,40 @@ func (s *syncHandlerImpl) checkStandbySyncState(cluster *opengaussv1.OpenGaussCl
 		}
 	}
 	return synced
+}
+
+/**
+获取Sync standby的SyncState信息和Sync standby pod
+方法参数：
+        syncStateArr：当前CR中记录的最近一次的SyncState
+        standbyPodArr：当前状态为running的所有standby pod
+返回值：
+        当前所有Sync从的SyncStates
+        当前所有Sync从的pods
+方法逻辑：
+        遍历CR.status.SyncStates,过滤出所有State为Sync的 SyncState
+        遍历状态为running的所有standby pod,过滤出State为Sync的 Pod
+*/
+func (s *syncHandlerImpl) getSyncStandby(syncStateArr []opengaussv1.SyncState, standbyPodArr []corev1.Pod) ([]opengaussv1.SyncState, []corev1.Pod) {
+	syncStandbyArr := make([]opengaussv1.SyncState, 0)
+	syncStandbyMap := make(map[string]opengaussv1.SyncState)
+	syncStandbyPodArr := make([]corev1.Pod, 0)
+
+	if len(syncStateArr) == 0 {
+		return syncStandbyArr, syncStandbyPodArr
+	}
+	for _, syncState := range syncStateArr {
+		if syncState.State == OG_SYNC_STATE_SYNC {
+			syncStandbyArr = append(syncStandbyArr, syncState)
+			syncStandbyMap[syncState.IP] = syncState
+		}
+	}
+	for _, standbyPod := range standbyPodArr {
+		if _, ok := syncStandbyMap[standbyPod.Status.PodIP]; ok {
+			syncStandbyPodArr = append(syncStandbyPodArr, standbyPod)
+		}
+	}
+	return syncStandbyArr, syncStandbyPodArr
 }
 
 /*
@@ -604,7 +731,7 @@ func (s *syncHandlerImpl) fixStandbyInstance(cluster *opengaussv1.OpenGaussClust
 		if err == nil {
 			dbstate, _ = s.dbService.CheckDBState(fixedPod)
 			if dbstate.IsPending() {
-				dbstate, _ = s.dbService.StartStandby(fixedPod)
+				dbstate, _ = s.dbService.StartStandby(cluster, fixedPod)
 			}
 			if dbstate.IsStandby() && dbstate.IsNormal() {
 				if dbstate.IsInMaintenance() {
@@ -631,8 +758,8 @@ func (s *syncHandlerImpl) fixStandbyInstance(cluster *opengaussv1.OpenGaussClust
 方法参数：
 	cluster：当前CR
 	pods：当前所有Pod的数组
+	ipArray： 当前cr中的iplist
 	newPvcPods：新建PVC的Pod的IP集合
-	newPods：新建的Pod的IP集合
 方法逻辑：
 	在之前的configPrimary()中已经选出并配置了Primary
 	遍历所有Pod，对于角色为Standby的实例，根据IpList和RemoteIpList更新连接信息
@@ -645,84 +772,102 @@ func (s *syncHandlerImpl) fixStandbyInstance(cluster *opengaussv1.OpenGaussClust
 func (s *syncHandlerImpl) ensureStandbyInstances(cluster *opengaussv1.OpenGaussCluster, pods []corev1.Pod, ipArray []string, newPvcPods utils.Set) error {
 	primaryIP := cluster.Status.Primary
 	if (cluster.IsPrimary() && len(pods) > 1) || cluster.IsStandby() {
-		podsToBuild := make([]corev1.Pod, 0)
-		podsBuilt := make([]corev1.Pod, 0)
+		podsToBuild := make([]corev1.Pod, 0) //需要做build的实例，pod首次创建，即新的pvc
+		podsBuilt := make([]corev1.Pod, 0)   //状态正常的standby实例
 		for _, pod := range pods {
 			podIP := pod.Status.PodIP
 			if podIP == primaryIP {
 				continue
 			}
-			dbstate, err := s.dbService.CheckDBState(&pod)
-			if err != nil {
+			if newPvcPods.Contains(podIP) {
+				podsToBuild = append(podsToBuild, pod)
 				continue
 			}
+			dbstate, err := s.dbService.CheckDBState(&pod)
+			if err != nil {
+				s.Log.V(1).Info(fmt.Sprintf("[%s:%s]在Pod %s上执行CheckDBState失败，记录Event", cluster.Namespace, cluster.Name, pod.Name))
+				//s.Log.Error(err, fmt.Sprintf("[%s:%s]在Pod %s上配置数据实例，发生错误", cluster.Namespace, cluster.Name, primaryPod.Name))
+				continue
+			}
+			//进程不存在
 			if !dbstate.IsProcessExist() {
+				s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, &pod)
+				s.Log.V(1).Info(fmt.Sprintf("[%s:%s]Pod %s内数据库进程不存在,以Pending方式启动", cluster.Namespace, cluster.Name, pod.Name))
 				if state, started := s.dbService.StartPending(&pod); started {
 					dbstate = state
 				} else {
-					podsToBuild = append(podsToBuild, pod)
+					s.Log.V(1).Info(fmt.Sprintf("[%s:%s]Pod %s内数据库进程不存在,且无法以Pending方式启动", cluster.Namespace, cluster.Name, pod.Name))
+					continue
 				}
-			}
-			//主库转为同城集群，所有实例重启为pending状态，等待basebackup同步数据
-			if cluster.IsStandby() && cluster.IsRoleChange() && cluster.IsRemoteIpListChange() {
-				if !dbstate.IsPending() {
-					dbstate, _ = s.dbService.RestartPending(&pod)
-				}
-			} else if !newPvcPods.Contains(podIP) && (cluster.IsRemoteIpListChange() || cluster.IsIpListChange()) {
-				//有IP变动，需要配置连接信息
-				dbstate, _, _ = s.configDBInstance(cluster, &pod, ipArray, false, false, false)
-			}
 
-			//通过重启尝试修复故障
-			if cluster.IsPrimary() && dbstate.IsStandby() && !dbstate.IsNormal() && dbstate.IsBackupComplete() && !newPvcPods.Contains(podIP) {
-				newPod, newstate := s.fixStandbyInstance(cluster, pod)
-				dbstate = newstate
-				pod = newPod
+			}
+			if cluster.IsRemoteIpListChange() || cluster.IsIpListChange() {
+				configured := true
+				//有IP变动，需要配置连接信息
+				dbstate, configured, err = s.configDBInstance(cluster, &pod, ipArray, false, false, false)
+				if err != nil || !configured {
+					s.Log.V(1).Info(fmt.Sprintf("[%s:%s]集群remoteiplist/iplist发生变化，Pod %s重建加载配置失败,记录Event", cluster.Namespace, cluster.Name, pod.Name))
+					s.eventService.InstanceConfigFail(cluster, podIP, err)
+					continue
+				}
+
+			}
+			//todo 主库转为同城集群,角色发生变化 ,processMultiplePrimary已经将原来的primary启动为standby，此步骤考虑去掉
+			if cluster.IsStandby() && cluster.IsRoleChange() && dbstate.IsPrimary() {
+				dbstate, _ = s.dbService.RestartStandby(cluster, &pod)
+			}
+			if dbstate.IsPending() {
+				// 实例已配置replconninfo, 重启为standby
+				startToStandbyFlag := false
+				dbstate, startToStandbyFlag = s.dbService.StartDBToStandby(cluster, &pod)
+				if !startToStandbyFlag {
+					s.Log.V(1).Info(fmt.Sprintf("[%s:%s]Pod %s由Pending启动为Standby失败,记录Event", cluster.Namespace, cluster.Name, pod.Name))
+					s.eventService.FixStandbyFail(cluster, podIP, dbstate.PrintableString())
+					continue
+				}
 			}
 
 			if dbstate.IsStandby() {
 				if dbstate.IsNormal() {
 					podsBuilt = append(podsBuilt, pod)
-				} else if !dbstate.IsConfigured() {
-					podsToBuild = append(podsToBuild, pod)
-				} else if dbstate.IsDisconnected() {
-					continue
-				}
-			} else if dbstate.IsPending() {
-				if !dbstate.IsConfigured() {
-					podsToBuild = append(podsToBuild, pod)
 				} else {
-					// 实例已配置replconninfo, 重启为standby
-					dbstate, _ = s.dbService.StartDBToStandby(&pod)
+					s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, &pod)
+					s.eventService.RecordNotNormalStandby(cluster, podIP, dbstate.PrintableString())
+					s.Log.V(1).Info(fmt.Sprintf("[%s:%s]Pod %s实例状态异常[%s]", cluster.Namespace, cluster.Name, pod.Name, dbstate.PrintableString()))
 				}
 			}
 		}
 
-		//通过basebackup，从Primary或者正常的Standby复制数据
+		//通过build方式构建从库，优先选择normal从作为源端，其次选择主，其次直接build(即不指定ip）,进行build
+		//不指定源端，则会以主库构建从库
 		sourceIP := primaryIP
-		if cluster.IsStandby() {
-			remoutIpCount := len(cluster.GetValidSpec().RemoteIpList)
-			sourceIP = cluster.GetValidSpec().RemoteIpList[remoutIpCount-1]
-		} else {
+		if cluster.IsPrimary() {
 			podsBuilt = s.getSyncPods(cluster, podsBuilt)
 		}
+
 		for len(podsToBuild) > 0 {
-			s.Log.V(1).Info(fmt.Sprintf("[%s:%s]开始向%d个节点复制数据", cluster.Namespace, cluster.Name, len(podsToBuild)))
+			s.Log.V(1).Info(fmt.Sprintf("[%s:%s]当前需要执行build重建的实例有%d个", cluster.Namespace, cluster.Name, len(podsToBuild)))
 			if len(podsBuilt) > 0 {
 				if len(podsBuilt) == 1 {
 					sourceIP = podsBuilt[0].Status.PodIP
 				} else {
-					maxLsnPod := s.dbService.FindPodWithLargestLSN(podsBuilt, "")
+					maxLsnPod := s.dbService.FindPodWithLargestLSN(podsBuilt, "", cluster.Status.SyncStates)
 					sourceIP = maxLsnPod.Status.PodIP
 				}
 			}
 			targetPod := podsToBuild[0]
-			if err := s.ensureStandby(cluster, targetPod, sourceIP, ipArray); err != nil {
+			//在ensureStandbyByBuild方法中判断当前源端是否为主库
+			dbstate, err := s.ensureStandbyByBuild(cluster, targetPod, sourceIP, ipArray)
+			if err != nil {
 				return err
 			}
-			//经过basebackup和配置后的节点，从目标节点数组移至源节点数组
+			//经过build和配置后的节点，从目标节点数组移至源节点数组
 			podsToBuild = podsToBuild[1:]
-			podsBuilt = append(podsBuilt, targetPod)
+			//如果为大容量库，可能出现如下场景:build完成，但数据库角色为standby，数据库状态为非normal，Detail Information: couldConnection
+			if dbstate.IsNormal() && dbstate.IsStandby() {
+				podsBuilt = append(podsBuilt, targetPod)
+			}
+
 		}
 	}
 	return nil
@@ -748,8 +893,10 @@ func (s *syncHandlerImpl) ensureStandby(cluster *opengaussv1.OpenGaussCluster, p
 	state, success := s.dbService.BackupDB(&pod, sourceIP)
 	if success {
 		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]在Pod %s上完成数据复制", cluster.Namespace, cluster.Name, pod.Name))
+		//首先启成Pending
 		_, success = s.dbService.StartPending(&pod)
 		if success {
+			//启动standby
 			_, configured, _ := s.configDBInstance(cluster, &pod, ipArr, false, true, true)
 			if configured {
 				s.Log.V(1).Info(fmt.Sprintf("[%s:%s]位于Pod %s上的实例完成配置", cluster.Namespace, cluster.Name, pod.Name))
@@ -769,6 +916,57 @@ func (s *syncHandlerImpl) ensureStandby(cluster *opengaussv1.OpenGaussCluster, p
 			}
 		}
 		return fmt.Errorf("[%s:%s]在Pod %s上复制数据失败", cluster.Namespace, cluster.Name, pod.Name)
+	}
+}
+
+/*
+通过build操作构建Standby实例
+方法参数：
+	cluster：当前CR
+	pod：当前Pod
+	sourceIP：用于build的源节点IP
+	ipArr：需配置到连接信息的IP数组
+返回值：
+	当前Pod的实例状态
+	错误信息
+方法逻辑：
+	从源节点进行build
+	如果成功则根据ipArr配置实例连接信息和其他参数
+	如果失败则删除当前节点资源
+*/
+func (s *syncHandlerImpl) ensureStandbyByBuild(cluster *opengaussv1.OpenGaussCluster, pod corev1.Pod, sourceIP string, ipArr []string) (utils.DBState, error) {
+	dbstate := utils.InitDBState()
+	sourceIsPrimary := true
+	if sourceIP == cluster.Status.Primary {
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]对备库%s进行全备build操作", cluster.Namespace, cluster.Name, pod.Status.PodIP))
+	} else {
+		sourceIsPrimary = false
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]以实例%s为源端对备库%s进行全备build操作", cluster.Namespace, cluster.Name, sourceIP, pod.Status.PodIP))
+	}
+
+	//修改配置文件
+	//新建pvc，状态为pending ，pending状态下执行build会报如下错误
+	//（The local server run as Pending,build cannot be executed.）
+	_, configured, _ := s.configDBInstance(cluster, &pod, ipArr, false, true, false)
+	if configured {
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]位于Pod %s上的实例完成配置", cluster.Namespace, cluster.Name, pod.Name))
+	} else {
+		return dbstate, fmt.Errorf("[%s:%s]在Pod %s上配置数据库实例失败", cluster.Namespace, cluster.Name, pod.Name)
+	}
+
+	_, success := s.dbService.BuildDB(&pod, sourceIP, sourceIsPrimary)
+	dbstate, _ = s.dbService.CheckDBState(&pod)
+	if success {
+		s.Log.V(1).Info(fmt.Sprintf("[%s:%s]在Pod %s上完成build操作", cluster.Namespace, cluster.Name, pod.Name))
+		s.eventService.InstanceBuildComplete(cluster, pod.Status.PodIP, dbstate.PrintableString())
+		return dbstate, nil
+	} else {
+		s.eventService.InstanceBuildFail(cluster, pod.Status.PodIP)
+		//todo 是否需要删除pod
+		//if e := s.resourceService.CleanPodResource(cluster, pod.Status.PodIP); e != nil {
+		//      return e
+		//}
+		return dbstate, fmt.Errorf("[%s:%s]在Pod %s上build失败", cluster.Namespace, cluster.Name, pod.Name)
 	}
 }
 
@@ -822,7 +1020,7 @@ func (s *syncHandlerImpl) cleanupCluster(cluster *opengaussv1.OpenGaussCluster) 
 		if len(configuredPods) == 1 {
 			newPrimaryPod = configuredPods[0]
 		} else {
-			newPrimaryPod = s.dbService.FindPodWithLargestLSN(configuredPods, "")
+			newPrimaryPod = s.dbService.FindPodWithLargestLSN(configuredPods, "", cluster.Status.SyncStates)
 		}
 		//主从切换
 		if _, _, e := s.switchPrimary(cluster, cluster.Status.Primary, newPrimaryPod.Status.PodIP); e != nil {
@@ -843,6 +1041,10 @@ func (s *syncHandlerImpl) cleanupCluster(cluster *opengaussv1.OpenGaussCluster) 
 			s.Log.Error(e, fmt.Sprintf("[%s:%s]在Pod %s上配置数据实例，发生错误", cluster.Namespace, cluster.Name, primaryPod.Name))
 			return e
 		}
+		success, err := s.dbService.ConfigSyncParams(cluster, primaryPod, ipArray)
+		if !success {
+			s.Log.Error(err, fmt.Sprintf("[%s:%s]在primaryPod %s上配置数据库实例synchronous_standby_names与most_available_sync参数，发生错误", cluster.Namespace, cluster.Name, primaryPod.Name))
+		}
 	}
 	for _, pod := range pods {
 		podIP := pod.Status.PodIP
@@ -854,6 +1056,11 @@ func (s *syncHandlerImpl) cleanupCluster(cluster *opengaussv1.OpenGaussCluster) 
 			_, configured, err := s.configDBInstance(cluster, &pod, ipArray, false, true, false)
 			if !configured {
 				s.Log.Error(err, fmt.Sprintf("[%s:%s]在Pod %s上配置数据实例，发生错误", cluster.Namespace, cluster.Name, pod.Name))
+				continue
+			}
+			success, err := s.dbService.ConfigSyncParams(cluster, &pod, ipArray)
+			if !success {
+				s.Log.Error(err, fmt.Sprintf("[%s:%s]在Pod %s上配置数据库实例synchronous_standby_names与most_available_sync参数，发生错误", cluster.Namespace, cluster.Name, pod.Name))
 				continue
 			}
 		} else {
@@ -909,7 +1116,9 @@ func (s *syncHandlerImpl) switchPrimary(cluster *opengaussv1.OpenGaussCluster, o
 	}
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]开始在%s和%s上的数据库实例间做主从切换", cluster.Namespace, cluster.Name, originPrimaryPod.Name, newPrimaryPod.Name))
 	s.removeRoleLabelFromPod(cluster, originPrimaryIP)
-	oldPrimaryState, newPrimaryState, err := s.dbService.SwitchPrimary(originPrimaryPod, newPrimaryPod)
+	//原主移除label后，设置default_transaction_read_only为on，待新主产生后，再设置为off
+	s.dbService.SetDefaultTransactionReadOnly(originPrimaryPod, utils.DEFAULT_TRANSACTION_READ_ONLY_ON)
+	oldPrimaryState, newPrimaryState, err := s.dbService.SwitchPrimary(cluster, originPrimaryPod, newPrimaryPod)
 	if err != nil {
 		s.Log.Error(err, fmt.Sprintf("[%s:%s]在%s和%s之间进行主从切换，发生错误", cluster.Namespace, cluster.Name, originPrimaryPod.Name, newPrimaryPod.Name))
 		return oldPrimaryState, newPrimaryState, err
@@ -917,7 +1126,14 @@ func (s *syncHandlerImpl) switchPrimary(cluster *opengaussv1.OpenGaussCluster, o
 		return oldPrimaryState, newPrimaryState, fmt.Errorf("[%s:%s]在%s和%s之间进行的主从切换未能成功", cluster.Namespace, cluster.Name, originPrimaryPod.Name, newPrimaryPod.Name)
 	}
 	s.addRoleLabelToPod(cluster, originPrimaryPod.Status.PodIP, false)
+	//新主产生，查询新主上的data pvc使用率是否达到阈值，如果未达到，新主上设置default_transaction_read_only为off；如果查询使用率报错，也设置default_transaction_read_only为off
+	if usageRate, err := s.dbService.QueryDatadirStorageUsage(newPrimaryPod, cluster.Name); err == nil {
+		s.dbService.IsExceedStorageThreshold(newPrimaryPod, usageRate)
+	} else {
+		s.dbService.SetDefaultTransactionReadOnly(newPrimaryPod, utils.DEFAULT_TRANSACTION_READ_ONLY_OFF)
+	}
 	s.addRoleLabelToPod(cluster, newPrimaryPod.Status.PodIP, true)
+	cluster.Status.Primary = newPrimaryPod.Status.PodIP
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]在%s和%s之间进行的主从切换已完成", cluster.Namespace, cluster.Name, originPrimaryPod.Name, newPrimaryPod.Name))
 	s.eventService.InstanceSwitchover(cluster, originPrimaryIP, newPrimaryIP)
 	return oldPrimaryState, newPrimaryState, nil
@@ -953,9 +1169,12 @@ func (s *syncHandlerImpl) updateDBConfig(cluster *opengaussv1.OpenGaussCluster) 
 				return e
 			}
 			if dbstate.IsPrimary() {
-				s.dbService.RestartPrimary(&pod)
+				dbstate, _ = s.dbService.RestartPrimary(cluster, &pod)
 			} else if dbstate.IsStandby() {
-				s.dbService.RestartStandby(&pod)
+				dbstate, _ = s.dbService.RestartStandby(cluster, &pod)
+			}
+			if !dbstate.IsNormal() {
+				s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, &pod)
 			}
 		}
 	}
@@ -1022,7 +1241,7 @@ func (s *syncHandlerImpl) upgradeCluster(cluster *opengaussv1.OpenGaussCluster) 
 			if len(standbyPods) == 1 {
 				newPrimaryPod = standbyPods[0]
 			} else {
-				newPrimaryPod = s.dbService.FindPodWithLargestLSN(standbyPods, "")
+				newPrimaryPod = s.dbService.FindPodWithLargestLSN(standbyPods, "", cluster.Status.SyncStates)
 			}
 			if _, _, e := s.switchPrimary(cluster, primaryToUpgrade, newPrimaryPod.Status.PodIP); e != nil {
 				return e
@@ -1063,10 +1282,10 @@ func (s *syncHandlerImpl) upgradeCluster(cluster *opengaussv1.OpenGaussCluster) 
 func (s *syncHandlerImpl) upgradePod(cluster *opengaussv1.OpenGaussCluster, podIP string, startToPrimary bool) bool {
 	podName := cluster.GetPodName(podIP)
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]升级Pod %s", cluster.Namespace, cluster.Name, podName))
-	node := ""
+	upgradePodEntry := opengaussv1.IpNodeEntry{}
 	for _, entry := range cluster.GetValidSpec().IpList {
 		if entry.Ip == podIP {
-			node = entry.NodeName
+			upgradePodEntry = entry
 			break
 		}
 	}
@@ -1074,16 +1293,25 @@ func (s *syncHandlerImpl) upgradePod(cluster *opengaussv1.OpenGaussCluster, podI
 	if err != nil {
 		return false
 	}
+	s.Log.Info(fmt.Sprintf("[%s:%s]删除Pod %s", cluster.Namespace, cluster.Name, podName))
 	if e := s.resourceService.DeletePod(pod); e != nil {
+		s.Log.Error(e, fmt.Sprintf("[%s:%s]DeletePod 失败 %s", cluster.Namespace, cluster.Name, podName))
 		return false
 	}
 	//确保Pod删除完成
 	deleted := s.resourceService.WaitPodCleanup(cluster, podName)
 	if !deleted {
-		return false
+		s.Log.Info(fmt.Sprintf("[%s:%s]正常删除Pod %s 失败，强制删除", cluster.Namespace, cluster.Name, podName))
+		if e := s.resourceService.ForceDeletePod(pod); e != nil {
+			s.Log.Error(e, fmt.Sprintf("[%s:%s]ForceDeletePod 失败 %s", cluster.Namespace, cluster.Name, podName))
+			return false
+		}
+		if !s.resourceService.WaitPodCleanup(cluster, podName) {
+			return false
+		}
 	}
 
-	_, _, err = s.resourceService.EnsurePodResource(cluster, opengaussv1.IpNodeEntry{Ip: podIP, NodeName: node})
+	_, _, err = s.resourceService.EnsurePodResource(cluster, upgradePodEntry)
 	if err != nil {
 		return false
 	}
@@ -1098,6 +1326,7 @@ func (s *syncHandlerImpl) upgradePod(cluster *opengaussv1.OpenGaussCluster, podI
 
 	ok := false
 	restart := false
+	dbstate := utils.InitDBState()
 	//如果有参数改变，需要配置
 	if cluster.IsDBConfigChange() {
 		configured, restartRequired, e := s.dbService.ConfigDBProperties(&newPod, cluster.ChangedConfig())
@@ -1109,21 +1338,30 @@ func (s *syncHandlerImpl) upgradePod(cluster *opengaussv1.OpenGaussCluster, podI
 	//启动实例
 	if startToPrimary {
 		if restart {
-			_, ok = s.dbService.RestartPrimary(&newPod)
+			dbstate, ok = s.dbService.RestartPrimary(cluster, &newPod)
 		} else {
-			_, ok = s.dbService.StartPrimary(&newPod)
+			dbstate, ok = s.dbService.StartPrimary(cluster, &newPod)
+		}
+		//选主之后，查询新主上的data pvc使用率是否达到阈值，如果未达到，新主上设置default_transaction_read_only为off；如果查询使用率报错，也设置default_transaction_read_only为off
+		if usageRate, err := s.dbService.QueryDatadirStorageUsage(&newPod, cluster.Name); err == nil {
+			s.dbService.IsExceedStorageThreshold(&newPod, usageRate)
+		} else {
+			s.dbService.SetDefaultTransactionReadOnly(&newPod, utils.DEFAULT_TRANSACTION_READ_ONLY_OFF)
 		}
 	} else {
 		if restart {
-			_, ok = s.dbService.RestartStandby(&newPod)
+			dbstate, ok = s.dbService.RestartStandby(cluster, &newPod)
 		} else {
-			_, ok = s.dbService.StartStandby(&newPod)
+			dbstate, ok = s.dbService.StartStandby(cluster, &newPod)
 		}
 	}
 
 	//移除维护标记文件，添加Label
 	_, ok = s.dbService.RemoveMaintenanceFlag(&newPod)
-	s.addRoleLabelToPod(cluster, podIP, startToPrimary)
+	if dbstate.IsNormal() {
+		s.addRoleLabelToPod(cluster, podIP, startToPrimary)
+	}
+
 	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]Pod %s升级完成", cluster.Namespace, cluster.Name, pod.Name))
 	s.eventService.InstanceUpgrade(cluster, podIP)
 	return ok
@@ -1149,7 +1387,11 @@ func (s *syncHandlerImpl) addRoleLabelToPod(cluster *opengaussv1.OpenGaussCluste
 */
 func (s *syncHandlerImpl) removeRoleLabelFromPod(cluster *opengaussv1.OpenGaussCluster, ip string) error {
 	podName := cluster.GetPodName(ip)
-	return s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, podName)
+	pod, e := s.resourceService.GetPod(cluster.Namespace, podName)
+	if e != nil {
+		return e
+	}
+	return s.resourceService.RemoveRoleLabelFromPod(cluster.Namespace, pod)
 }
 
 /*
@@ -1164,7 +1406,8 @@ func (s *syncHandlerImpl) deletePod(cluster *opengaussv1.OpenGaussCluster, ip st
 	if e != nil {
 		return e
 	}
-	if err := s.resourceService.DeletePod(pod); err != nil {
+	s.Log.V(1).Info(fmt.Sprintf("[%s:%s]删除pod：%s，删除前所在node:%s", cluster.Namespace, cluster.Name, pod.Name, pod.Spec.NodeName))
+	if err := s.resourceService.ForceDeletePod(pod); err != nil {
 		return err
 	}
 	s.eventService.InstanceDelete(cluster, ip)
@@ -1185,7 +1428,7 @@ func (s *syncHandlerImpl) deletePod(cluster *opengaussv1.OpenGaussCluster, ip st
 	错误信息
 */
 func (s *syncHandlerImpl) configDBInstance(cluster *opengaussv1.OpenGaussCluster, pod *corev1.Pod, ipArray []string, primary, start, logEvent bool) (utils.DBState, bool, error) {
-	dbstate, configured, err := s.dbService.ConfigDB(pod, ipArray, cluster.GetValidSpec().RemoteIpList, primary, start, cluster.GetValidSpec().Config)
+	dbstate, configured, err := s.dbService.ConfigDB(cluster, pod, ipArray, cluster.GetValidSpec().RemoteIpList, primary, start, cluster.GetValidSpec().Config, cluster.Status.Spec.Config)
 	if !configured {
 		s.eventService.InstanceConfigFail(cluster, pod.Status.PodIP, err)
 	} else if logEvent {
@@ -1197,6 +1440,7 @@ func (s *syncHandlerImpl) configDBInstance(cluster *opengaussv1.OpenGaussCluster
 	}
 	return dbstate, configured, err
 }
+
 func (s *syncHandlerImpl) upgradeRequired(cluster *opengaussv1.OpenGaussCluster) bool {
 	if cluster.IsUpgrade() {
 		return true
@@ -1204,6 +1448,13 @@ func (s *syncHandlerImpl) upgradeRequired(cluster *opengaussv1.OpenGaussCluster)
 	if !cluster.IsNew() && cluster.Status.Spec.Schedule.MostAvailableTimeout == 0 {
 		return true
 	}
+	if !cluster.IsNew() && cluster.Status.Spec.Schedule.PollingPeriod == 0 {
+		return true
+	}
+	if !s.resourceService.ClusterPodsIsExtendIpMatch(cluster) {
+		return true
+	}
+
 	return s.isPreConfigMapExist(cluster)
 }
 func (s *syncHandlerImpl) isPreConfigMapExist(cluster *opengaussv1.OpenGaussCluster) bool {
@@ -1213,6 +1464,7 @@ func (s *syncHandlerImpl) isPreConfigMapExist(cluster *opengaussv1.OpenGaussClus
 	}
 	return false
 }
+
 func (s *syncHandlerImpl) cleanupConfigMaps(cluster *opengaussv1.OpenGaussCluster) error {
 	types := []string{"db", "log", "sh", "init"}
 	for _, t := range types {

@@ -32,7 +32,7 @@ const (
 	SIDECAR_CPU_REQ                = "200m"
 	SIDECAR_MEM_REQ                = "500Mi"
 	SIDECAR_STORAGE_REQ            = "1Gi"
-	DEFAULT_STORAGE_CLASS          = "csi-carina-sc"
+	DEFAULT_STORAGE_CLASS          = "topolvm-provisioner"
 	DEFAULT_DB_PORT                = 5432
 	DEFAULT_SCRIPT_CM_NAME         = "opengauss-script-config"
 	DEFAULT_FILEBEAT_CM_NAME       = "opengauss-filebeat-config"
@@ -40,6 +40,13 @@ const (
 	DEFAULT_GRACE_PERIOD           = 30
 	DEFAULT_TOLERATION             = 300
 	DEFAULT_MOST_AVAILABLE_TIMEOUT = 60
+	OG_MONITOR_TYPE_KEY            = "og_MONITOR_TYPE"
+	OG_MONITOR_TYPE_VAL            = "OPENGAUSS"
+	NETWORK_CALICO                 = "calico"
+	NETWORK_KUBE_OVN               = "kube-ovn"
+	DEFAULT_POLLING_PERIOD         = 60
+	DEFAULT_LIVENESS_PROBE_PERIOD  = 30
+	DEFAULT_READINESS_PROBE_PERIOD = 30
 )
 
 /*
@@ -130,6 +137,17 @@ func (in *OpenGaussCluster) DefaultSpec() bool {
 			update = true
 		}
 	}
+	if len(in.Spec.CustomizedEnv) == 0 {
+		internalMap := make(map[string]string)
+		internalMap[OG_MONITOR_TYPE_KEY] = OG_MONITOR_TYPE_VAL
+		in.Spec.CustomizedEnv = internalMap
+		update = true
+	}
+	//如果是存量集群，且NetworkClass属性为空，则设置NetworkClass为calico，即兼容旧版operator，已经部署的og集群
+	if !in.IsNew() && in.Spec.NetworkClass == "" {
+		in.Spec.NetworkClass = NETWORK_CALICO
+		update = true
+	}
 	return update
 }
 
@@ -149,6 +167,18 @@ func updateScheduleConfig(sc ScheduleConfig) (ScheduleConfig, bool) {
 	}
 	if sc.MostAvailableTimeout == 0 {
 		sc.MostAvailableTimeout = DEFAULT_MOST_AVAILABLE_TIMEOUT
+		update = true
+	}
+	if sc.PollingPeriod == 0 {
+		sc.PollingPeriod = DEFAULT_POLLING_PERIOD
+		update = true
+	}
+	if sc.LivenessProbePeriod == 0 {
+		sc.LivenessProbePeriod = DEFAULT_LIVENESS_PROBE_PERIOD
+		update = true
+	}
+	if sc.ReadinessProbePeriod == 0 {
+		sc.ReadinessProbePeriod = DEFAULT_READINESS_PROBE_PERIOD
 		update = true
 	}
 	return sc, update

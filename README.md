@@ -1,7 +1,34 @@
 ![](https://badgen.net/badge/License/MulanPSL2/green) ![](https://badgen.net/badge/Language/Go/green) 
 # openGauss-operator
 
+## 发行说明
+
+operator2.0是基于1.0，与之前的版本特性功能保持兼容，并在此基础上优化了部分功能：
+
+1.优化了Pod健康查询超时机制，删除了liveness探针，readiness探针由执行脚本的方式改为tcp dbport方式
+
+2.支持新的网络插件和存储插件，当前网络插件支持calico和kube-ovn，存储插件支持topolvm和华为分布式存储，支持混合插件部署，即支持在两个使用不同网络和存储插件的k8s环境上搭建openGauss集群
+
+3.优化opengauss集群无主状态下选择的逻辑
+
+4.修改了构建从库的方式，原逻辑通过gs_basebackup方式构建从库，当前通过build方式构建从库
+
+5.优化了华为分布式存储插件下的pod创建流程，对于因Failmount方式导致Pod无法拉起的情况，将始终等待直至pvc可以成功挂载到pod上
+
+6.kube-ovn环境下，支持pod设置多网卡，即支持pod设置两个ip，分别用于提供业务和其他服务（如备份）
+
+7.新增日志输出，便于排查生产问题
+
+8.修复特定场景下openGauss集群的实例格式发生变化后replconninfo配置更新问题
+
+9.修改pod db容器的启动脚本，增加日志pvc和存储pvc使用率的输出
+
+10.新增pod调度策略，支持部署到指定node；支持pod的liveness和readiness探针周期可配置
+
+11.新增data pvc使用监控，data pvc存储使用达到阈值后设置为只读，即修改default_transaction_read_only为on，扩容后自动修改为off
+
 ## 介绍
+
 ### Operator介绍
 > openGauss operator 是一个基于Kubernetes管理的openGauss集群安装与维护的工具，其功能主要包括数据库集群的安装部署、维护、拓扑保持、资源升级、水平扩缩容、同城切换等全生命周期管理。
 
@@ -37,52 +64,75 @@ openGauss operator 支持以下功能
 - 机器架构
   - Linux version 3.10.0-957.el7.x86_64 
 - CNI 支持类型
-  - calico
+  - calico、kube-ovn（kube-ovn环境下，支持pod设置多网卡，即支持pod设置两个ip，分别用于提供业务和其他服务（如备份））
 - CSI 支持类型
   - `hostpath`
   - topolvm
   - huawei分布式存储
+  - 支持混合插件部署，即支持在两个使用不同网络和存储插件的k8s环境上搭建openGauss集群
+
+
+
 ## [安装](doc/how_to_deploy_operator.md)
+
 ### 基础镜像
-准备openEuler镜像
+1. 下载openGauss镜像
+
 ```bash
-# 下载openEuler镜像
-wget http://121.36.97.194/openEuler-20.03-LTS-SP3/docker_img/x86_64/openEuler-docker.x86_64.tar.xz
-# 加载
-docker image load -i openEuler-docker.x86_64.tar.xz
+wget https://gitee.com/opengauss/openGauss-operator/releases/download/2.0/opengauss-operatorv2.tar
+docker load -i opengauss-operatorv2.tar
 ```
-编写dockerfile，打包openGauss镜像
+2. 下载operator镜像
+
 ```bash
-# 下载极简版openGauss安装介质
-curl -LO https://opengauss.obs.cn-south-1.myhuaweicloud.com/3.0.0/x86_openEuler/openGauss-3.0.0-openEuler-64bit.tar.bz2
-# 打包openGauss镜像
-docker build -f og3.0.0-x86_64.dockerfile -t opengauss-3.0.0:latest .
-# 保存openGauss镜像
-docker save opengauss-3.0.0:latest -o opengauss-docker.x86_64.tar.xz
+wget https://gitee.com/opengauss/openGauss-operator/releases/download/2.0/opengauss-5.0.2-docker.x86_64.tar
+docker load -i opengauss-5.0.2-docker.x86_64.tar
 ```
-打包operator镜像
+### 单节点部署
+1. 部署operator
+
 ```bash
-# 下载operator到本地
-git clone https://gitee.com/opengauss/openGauss-operator.git
-# 进入openGauss-operator路径
-cd openGauss-operator
-# 准备相关依赖
-curl -LO https://opengauss.obs.cn-south-1.myhuaweicloud.com/3.0.0/x86_openEuler/openGauss-3.0.0-openEuler-64bit.tar.bz2
-curl -L -O https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.11.1-linux-x86_64.tar.gz
-curl -LO https://github.com/krallin/tini/releases/download/v0.19.0/tini-amd64
-# 打包镜像
-make docker-build IMG=opengauss-operator:v0.1.0
+make deploy IMG=opengauss-operator:v2.0.0
 ```
-### 部署
-部署operator
-```bash
-make deploy IMG=opengauss-operator:v0.1.0
-```
-编写openGauss集群的配置文件`sample.yaml`，并启动集群
+2. 编写openGauss集群的配置文件`sample.yaml`，并启动集群
+
 ```bash
 kubectl apply -f sample.yaml 
 ```
-关于部署operator的详细步骤，参考[部署详情](doc/how_to_deploy_operator.md)
+`sample.yaml`
+
+```
+apiVersion: opengauss.sig/v1
+kind: OpenGaussCluster
+metadata:
+  name: ogtest01     #pod名，根据实际情况修改
+spec:
+  cpu: '2'
+  storage: 10Gi
+  image: opengauss-5.0.2:latest
+  memory: 3G
+  readport: 31000
+  writeport: 31001
+  localrole: primary
+  dbport: 26000
+  hostpathroot: /docker/opengauss_operator/ogtest01    #本地存储根路径，使用本地存储时填写
+  #storageclass: topolvm-class    #填写对应存储插件的storageclass即可
+  networkclass: calico     #当前仅支持calico和kube-ovn两种
+  config:
+    advance_xlog_file_num: "10"
+    archive_command: '''cp %p /gaussarch/archive/%f'''
+    archive_dest: '''/gaussdata/archive/archive_xlog'''
+    archive_mode: "on"
+    bbox_dump_path: '''/gaussarch/corefile'''
+    log_directory: '''/gaussarch/log/omm/pg_log'''
+    max_connections: "2000"
+  iplist:
+  - nodename: node    # 宿主机hostname名
+    ip: 192.170.0.110  # POD IP，根据实际情况修改
+```
+
+关于构建编译镜像步骤，参考[部署详情](doc/how_to_deploy_operator.md)
+
 ## 使用手册
 ### 自定义资源CRD描述
 CRD主要属性见下表

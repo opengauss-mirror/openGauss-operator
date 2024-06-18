@@ -9,7 +9,6 @@ EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 See the Mulan PSL v2 for more details.
 */
-
 package utils
 
 import (
@@ -18,6 +17,8 @@ import (
 )
 
 type DBState struct {
+	//0:否  1：是
+	//opengauss进程是否存在
 	ProcessExist  int32  `json:"chkprocess,omitempty"`
 	ConnAvailable int32  `json:"chkconn,omitempty"`
 	Maintenance   int32  `json:"maintenance,omitempty"`
@@ -44,7 +45,7 @@ var initDBState = DBState{
 	Standalone:    0,
 	Hang:          0,
 	Normal:        0,
-	BuildStatus:   0,
+	BuildStatus:   3, //初始值设置为3，表示尚未开始build， gs_ctl querybuild -D ${PGDATA} 查询结果为最后一次build状态
 	BackupStatus:  0,
 	RestoreStatus: 0,
 	Connections:   0,
@@ -78,9 +79,7 @@ func (state DBState) PrintableString() string {
 	stateString.WriteString(fmt.Sprintf("Connection available: %t, ", state.IsConnectionAvailble()))
 	stateString.WriteString(fmt.Sprintf("DB state normal: %t, ", state.IsNormal()))
 	stateString.WriteString(fmt.Sprintf("Maintenance: %t, ", state.IsInMaintenance()))
-	if !state.IsBuildComplete() {
-		stateString.WriteString(fmt.Sprintf("Build status: %d, ", state.BuildStatus))
-	}
+	stateString.WriteString(fmt.Sprintf("Build status: %s, ", state.GetBuildStatus()))
 	backupStatus := ""
 	switch state.BackupStatus {
 	case 1:
@@ -93,6 +92,7 @@ func (state DBState) PrintableString() string {
 		backupStatus = "no data"
 	}
 	stateString.WriteString(fmt.Sprintf("Backup status: %s, ", backupStatus))
+
 	restoreStatus := ""
 	switch state.RestoreStatus {
 	case 1:
@@ -178,6 +178,12 @@ func (state DBState) NeedConfigure() bool {
 	return false
 }
 
+/*
+判断opengauss进程是否存在
+返回值：
+    true:存在
+	false: 不存在
+*/
 func (state DBState) IsProcessExist() bool {
 	return state.ProcessExist == 1
 }
@@ -218,9 +224,18 @@ func (state DBState) IsBuildComplete() bool {
 	return state.BuildStatus == 0
 }
 
+func (state DBState) IsBuilding() bool {
+	return state.BuildStatus == 2
+}
+
+func (state DBState) IsBuildFail() bool {
+	return state.BuildStatus == 1
+}
+
 func (state DBState) BackupStarted() bool {
 	return state.BackupStatus != 0
 }
+
 func (state DBState) IsBackupComplete() bool {
 	return state.BackupStatus == 1
 }
@@ -255,4 +270,20 @@ func (state DBState) IsConfigured() bool {
 
 func (state DBState) IsDisconnected() bool {
 	return !state.IsNormal() && (state.DetailInfo == "Disconnected" || state.DetailInfo == "Connecting...")
+}
+func (state DBState) GetBuildStatus() string {
+	buildStatus := ""
+	switch state.BuildStatus {
+	case 0:
+		buildStatus = "Build completed"
+	case 1:
+		buildStatus = "Build failed"
+	case 2:
+		buildStatus = "Building"
+	case 3:
+		buildStatus = "no begin"
+	default:
+		buildStatus = "unknown"
+	}
+	return buildStatus
 }

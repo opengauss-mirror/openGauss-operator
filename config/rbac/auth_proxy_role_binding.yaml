@@ -18,5 +18,5 @@ roleRef:
   name: proxy-role
 subjects:
 - kind: ServiceAccount
-  name: controller-manager
+  name: default
   namespace: system

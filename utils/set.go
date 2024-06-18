@@ -68,6 +68,7 @@ func (set Set) ContainsAll(another Set) bool {
 	}
 	return true
 }
+
 func (set Set) Remove(val string) {
 	delete(set.Map, val)
 }
@@ -87,16 +88,27 @@ func (set Set) AddAllFromSet(another Set) {
 		set.Add(k)
 	}
 }
+
 func (set Set) RemoveAllFromSet(another Set) {
 	for k, _ := range another.Map {
 		set.Remove(k)
 	}
 }
 
+/*
+比较两个set是否相同
+Size相同，且内容相同
+*/
 func (set Set) Equals(another Set) bool {
 	return set.Size() == another.Size() && reflect.DeepEqual(set.Map, another.Map)
 }
 
+/*
+比较当前set与传入的another set不同
+参数： 传入的set
+返回值：beyond : 当前set与传入的set比较，多出的元素
+       missing： 当前set与传入的set比较，缺少的元素
+*/
 func (set Set) DiffTo(another Set) ([]string, []string) {
 	beyond := make([]string, 0)
 	missing := make([]string, 0)

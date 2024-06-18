@@ -42,31 +42,39 @@ const (
 	VOLUME_TYPE_DATA    = "data"
 	VOLUME_TYPE_LOG     = "log"
 
-	POD_IP            = "POD_IP"
-	POD_DB_IMG        = "POD_DB_IMG"
-	DB_CPU_LMT        = "DB_CPU_LMT"
-	DB_CPU_REQ        = "DB_CPU_REQ"
-	DB_MEM_LMT        = "DB_MEM_LMT"
-	DB_MEM_REQ        = "DB_MEM_REQ"
-	POD_SIDECAR_IMG   = "POD_SIDECAR_IMG"
-	SIDECAR_CPU_LMT   = "SIDECAR_CPU_LMT"
-	SIDECAR_CPU_REQ   = "SIDECAR_CPU_REQ"
-	SIDECAR_MEM_LMT   = "SIDECAR_MEM_LMT"
-	SIDECAR_MEM_REQ   = "SIDECAR_MEM_REQ"
-	POD_NODE_SELECT   = "POD_NODE_SELECT"
-	HOSTPATH_ROOT     = "HOSTPATH_ROOT"
-	CR_ARCHIVE_PATH   = "CR_ARCHIVE_PATH"
-	READ_SVC_NAME     = "READ_SVC_NAME"
-	WRITE_SVC_NAME    = "WRITE_SVC_NAME"
-	CLUSTER_CM_NAME   = "CLUSTER_CM_NAME"
-	SCRIPT_CM_NAME    = "SCRIPT_CM_NAME"
-	FILEBEAT_CM_NAME  = "FILEBEAT_CM_NAME"
-	CLUSTER_CM_VAL    = "CLUSTER_CM_VAL"
-	SCRIPT_CM_VAL     = "SCRIPT_CM_VAL"
-	FILEBEAT_CM_VAL   = "FILEBEAT_CM_VAL"
-	GRACE_PERIOD      = "GRACE_PERIOD"
-	TOLERATION_SECOND = "TOLERATION_SECOND"
-	YAML_FILEBEAT_CM  = `apiVersion: v1
+	POD_IP                               = "POD_IP"
+	POD_DB_IMG                           = "POD_DB_IMG"
+	DB_CPU_LMT                           = "DB_CPU_LMT"
+	DB_CPU_REQ                           = "DB_CPU_REQ"
+	DB_MEM_LMT                           = "DB_MEM_LMT"
+	DB_MEM_REQ                           = "DB_MEM_REQ"
+	POD_SIDECAR_IMG                      = "POD_SIDECAR_IMG"
+	SIDECAR_CPU_LMT                      = "SIDECAR_CPU_LMT"
+	SIDECAR_CPU_REQ                      = "SIDECAR_CPU_REQ"
+	SIDECAR_MEM_LMT                      = "SIDECAR_MEM_LMT"
+	SIDECAR_MEM_REQ                      = "SIDECAR_MEM_REQ"
+	POD_NODE_SELECT                      = "POD_NODE_SELECT"
+	HOSTPATH_ROOT                        = "HOSTPATH_ROOT"
+	CR_ARCHIVE_PATH                      = "CR_ARCHIVE_PATH"
+	READ_SVC_NAME                        = "READ_SVC_NAME"
+	WRITE_SVC_NAME                       = "WRITE_SVC_NAME"
+	CLUSTER_CM_NAME                      = "CLUSTER_CM_NAME"
+	SCRIPT_CM_NAME                       = "SCRIPT_CM_NAME"
+	FILEBEAT_CM_NAME                     = "FILEBEAT_CM_NAME"
+	CLUSTER_CM_VAL                       = "CLUSTER_CM_VAL"
+	SCRIPT_CM_VAL                        = "SCRIPT_CM_VAL"
+	FILEBEAT_CM_VAL                      = "FILEBEAT_CM_VAL"
+	GRACE_PERIOD                         = "GRACE_PERIOD"
+	TOLERATION_SECOND                    = "TOLERATION_SECOND"
+	NEED_INIT                            = "NEED_INIT"
+	LIVENESS_PROBE_PERIOD                = "LIVENESS_PROBE_PERIOD"
+	READINESS_PROBE_PERIOD               = "READINESS_PROBE_PERIOD"
+	FILEBEAT_OUT_KAFKA_HOSTS_KEY         = "FILEBEAT_CM_OUT_KAFKA_HOSTS"
+	FILEBEAT_OUT_KAFKA_USERNAME_KEY      = "FILEBEAT_CM_OUT_KAFKA_USERNAME"
+	FILEBEAT_OUT_KAFKA_PASSWORD_KEY      = "FILEBEAT_CM_OUT_KAFKA_PASSWORD"
+	FILEBEAT_OUT_KAFKA_TOPIC_KEY         = "FILEBEAT_CM_OUT_KAFKA_TOPIC"
+	DEFAULT_FILEBEAT_OUT_KAFKA_HOSTS_VAL = "kafkagw.xxx.xxx.xxx:9092"
+	YAML_FILEBEAT_CM                     = `apiVersion: v1
 kind: ConfigMap
 metadata:
   name: ${FILEBEAT_CM_NAME}
@@ -173,11 +181,11 @@ data:
     typeset log_dir=$1
     typeset retain=$2
     typeset today=$(date "+%Y%m%d%H%M")
-    logs=${log_dir}/delete_opgslog_${today}.log
-    lsts=${log_dir}/delete_opgslog_${today}.lst
-    find /gaussarch/log -type f -mtime +1 -name *log -exec gzip {} \; 1> ${logs} 2>${logs}
-    find /gaussarch/log -type f -mtime +${retain} 1> ${lsts} 2>${lsts}
-    find /gaussarch/log -type f -mtime +${retain} -exec rm -f {} \; 1>> ${logs} 2>> ${logs}
+    logs=${log_dir}/delete_opgslog.log
+    lsts=${log_dir}/delete_opgslog.lst
+    find /gaussarch/log -type f -mtime +1 -name \*log -exec gzip {} \; 1>> ${logs} 2>>${logs}
+    find /gaussarch/log -type f -mtime +${retain} 1>> ${lsts} 2>>${lsts} 
+    find /gaussarch/log -type f -mtime +${retain} -exec rm -f {} \; 1>> ${logs} 2>>${logs}
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
     echo "$timestamp clean logs in $log_dir older than $retain days complete" >> /gauss/files/logs/clean-log.log
   `
@@ -495,7 +503,7 @@ data:
     hang=0
     # 主从状态是否正常
     chkrepl=0
-    # build状态：0 成功；1 失败；2 正在build
+    # build状态：0 build完成；1 失败；2 正在build；3 尚未开始build
     buildstatus=0
     # 备份状态：0 没有备份日志文件；1 成功；2 失败；3 备份中
     basebackup=0
@@ -649,6 +657,11 @@ data:
     mkdir -p /gaussarch/log/omm/bin
     mkdir -p /gaussarch/log/omm/pg_audit
     mkdir -p /gaussarch/log/omm/pg_log
+    f_PrintLog "INFO" "Check whether is new pvc"
+    if [ ${NEED_INIT} != "true" ] ; then
+        f_PrintLog "INFO" "pvc already exists, not need init"
+        exit 0
+    fi
 
     f_PrintLog "INFO" "Find or install openGauss."
     [ -f "${PGDATA}/PG_VERSION" ] && exit 0
@@ -720,16 +733,34 @@ data:
         exit 1
     fi
 
+    # 查询日志pvc和存储pvc使用率，判断使用率是否达到100%
+    logUsage=$(df -h "/gaussarch" | awk 'NR==2 {print $5}' | cut -d'%' -f1)
+    dataUsage=$(df -h "/gaussdata/openGauss" | awk 'NR==2 {print $5}' | cut -d'%' -f1)
+    echo "data pvc usage is $dataUsage%, log pvc usage is $logUsage% "
+    threshold=100
+    if [ "$logUsage" -ge "$threshold" ]; then
+        echo "log pvc usage is $logUsage%, maybe affect the database startup"
+    fi
+    if [ "$dataUsage" -ge "$threshold" ]; then
+        echo "data pvc usage is $dataUsage%, maybe affect the database startup"
+    fi
+
+    #处理postmaster.pid already exists场景
+    if [  -f "${PGDATA}/postmaster.pid.lock" ]; then
+        echo "lock file "postmaster.pid/postmaster.pid.lock" already exists, maybe affect the startup,will clean it"
+        cd ${PGDATA}
+        mv postmaster.pid postmaster.pid_$(date +"%Y%m%d")
+        rm -rf postmaster.pid.lock
+    fi
     echo 'Starting openGauss with -M pending...'
-    gs_ctl -D ${PGDATA} -w start -M pending
-    [ "$?" -ne 0 ] && echo "Database startup failure." && exit 1
+    gs_ctl -D ${PGDATA} -w start -M pending &
+    [ "$?" -ne 0 ] && echo "Database startup failure." 
 
     scriptrunnerPath=$(whereis scriptrunner | awk -F ':' '{print $2}')
     if [ "$scriptrunnerPath" != '' ]; then
       mkdir -p /gauss/files/logs/
      nohup scriptrunner -c /gauss/files/script/scriptconfig-og.ini >> /gauss/files/logs/scriptrunner-og.log &
     fi
-
     #通过curl到kubernetes服务判断当前Pod是否成为孤岛
     #连续30次心跳失败，则判定当前Pod成为孤岛，停止主进程使Pod重启
     count=0
@@ -747,6 +778,8 @@ data:
       fi
       sleep 1s
     done
+    touch /gaussarch/PID_1_FILE
+    tail -s 30 -f /gaussarch/PID_1_FILE
 
   sidecar.entrypoint.sh: |
     #!/usr/bin/env bash
@@ -867,7 +900,7 @@ spec:
     protocol: TCP
     targetPort: ${CR_DB_PORT}
   selector:
-    app.kubernetes.io/name: ${CR_NAME}
+    opengauss.cluster: ${CR_NAME}
     opengauss.role: ${DB_ROLE}
   type: NodePort`
 
@@ -937,12 +970,12 @@ spec:
 kind: Pod
 metadata:
   name: ${POD_NAME}
-  namespace: ${CR_NAMESPACE}
   annotations:
-    cni.projectcalico.org/ipAddrs: '["${POD_IP}"]'
+    security.alpha.kubernetes.io/unsafe-sysctls: kernel.sem = 250 6400000 1000 25600
+  namespace: ${CR_NAMESPACE}
   labels:
     app.kubernetes.io/app: opengauss
-    app.kubernetes.io/name: ${CR_NAME}
+    opengauss.cluster: ${CR_NAME}
   ownerReferences:
   - apiVersion: ${CR_API_VERSION}
     blockOwnerDeletion: true
@@ -951,17 +984,16 @@ metadata:
     name: ${CR_NAME}
     uid: ${CR_UID}
 spec:
-  affinity:
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: kubernetes.io/hostname
-            operator: In
-            values:
-            - ${POD_NODE_SELECT}
+    #allowedUnsafeSysctls:
+  #- kernel.sem
+  securityContext:
+    sysctls:
+    - name: kernel.sem
+      value: "250 6400000 1000 25600"
   initContainers:
   - name: initenv
+    securityContext:
+      privileged: true
     image: ${POD_DB_IMG}
     imagePullPolicy: IfNotPresent
     command:
@@ -990,8 +1022,12 @@ spec:
         secretKeyRef:
           name: ${CR_SECRET_NAME}
           key: DBPAASOP_PASSWD
+    - name: NEED_INIT
+      value: ${NEED_INIT}    
   containers:
   - name: og
+    securityContext:
+      privileged: true
     image: ${POD_DB_IMG}
     imagePullPolicy: IfNotPresent
     command:
@@ -1020,26 +1056,12 @@ spec:
           - bash
           - -c
           - gs_ctl stop -D /gaussdata/openGauss/db1
-    livenessProbe:
-      exec:
-        command:
-        - sh
-        - -c
-        - if [ "$(bash /gauss/files/K8SLivenessProbe.sh)" -eq 0 ] || [ -f '/gauss/files/maintenance' ]; then  echo 0; else exit 1; fi
-      failureThreshold: 15
-      initialDelaySeconds: 30
-      periodSeconds: 1
-      successThreshold: 1
-      timeoutSeconds: 1
     readinessProbe:
-      exec:
-        command:
-        - sh
-        - -c
-        - if [ "$(bash /gauss/files/K8SReadinessProbe.sh)" -eq 0 ]; then  echo 0; else exit 1; fi
+      tcpSocket:
+        port: ${CR_DB_PORT}
       failureThreshold: 10
       initialDelaySeconds: 60
-      periodSeconds: 2
+      periodSeconds: ${READINESS_PROBE_PERIOD}
       successThreshold: 1
       timeoutSeconds: 1
     ports:
@@ -1066,11 +1088,13 @@ spec:
       subPath: log
     - name: sharedir
       mountPath: /gauss/files/sharedir
-    - name: opengauss-cluster-scripts
+    - name: ${CLUSTER_CM_NAME}
       mountPath: /gauss/files/cm-mnt
-    - name: opengauss-management-scripts
+    - name: ${SCRIPT_CM_NAME}
       mountPath: /gauss/files/script
   - name: sidecar
+    securityContext:
+      privileged: true
     image: ${POD_SIDECAR_IMG}
     imagePullPolicy: IfNotPresent
     command:

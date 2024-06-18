@@ -45,15 +45,15 @@ func (lsn LSN) String() string {
 }
 
 func (lsn LSN) CompareTo(another LSN) int {
-	result := compareInt(lsn.Left, another.Left)
+	result := CompareInt(lsn.Left, another.Left)
 	if result != 0 {
 		return result
 	}
-	result = compareInt(lsn.Middle, another.Middle)
+	result = CompareInt(lsn.Middle, another.Middle)
 	if result != 0 {
 		return result
 	}
-	return compareInt(lsn.Right, another.Right)
+	return CompareInt(lsn.Right, another.Right)
 }
 
 func (lsn LSN) CompareIP(that LSN) int {
@@ -67,7 +67,7 @@ func (lsn LSN) CompareIP(that LSN) int {
 			thisArray := IPToIntArray(lsn.PodIP)
 			thatArray := IPToIntArray(that.PodIP)
 			for i := 0; i < len(thisArray); i++ {
-				r := compareInt(thisArray[i], thatArray[i])
+				r := CompareInt(thisArray[i], thatArray[i])
 				if r != 0 {
 					result = r
 					break
@@ -78,7 +78,7 @@ func (lsn LSN) CompareIP(that LSN) int {
 	return result
 }
 
-func compareInt(this, that int) int {
+func CompareInt(this, that int) int {
 	if this > that {
 		return 1
 	} else if this < that {

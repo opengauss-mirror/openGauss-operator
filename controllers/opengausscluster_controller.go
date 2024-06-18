@@ -37,14 +37,16 @@ const (
 // OpenGaussClusterReconciler reconciles a OpenGaussCluster object
 type OpenGaussClusterReconciler struct {
 	client.Client
-	Log         logr.Logger
-	Scheme      *runtime.Scheme
-	syncHandler handler.SyncHandler
+	Log           logr.Logger
+	Scheme        *runtime.Scheme
+	syncHandler   handler.SyncHandler
+	PollingPeriod int64
 }
 
-func NewOpenGaussClusterReconciler(mgr ctrl.Manager, logger logr.Logger, concurrentConciler int, watchNamespaces, excludeNamespaces string, ensureStatusUpdate bool) (reconcile.Reconciler, error) {
+func NewOpenGaussClusterReconciler(mgr ctrl.Manager, logger logr.Logger, concurrentConciler int, watchNamespaces, excludeNamespaces string, reconcilePollingPeriod int64) (reconcile.Reconciler, error) {
 	reconciler := &OpenGaussClusterReconciler{Client: mgr.GetClient(), Log: logger, Scheme: mgr.GetScheme()}
-	reconciler.syncHandler = handler.NewSyncHandler(reconciler.Client, reconciler.Log, mgr.GetEventRecorderFor("opengauss-operator"), ensureStatusUpdate)
+	reconciler.PollingPeriod = reconcilePollingPeriod
+	reconciler.syncHandler = handler.NewSyncHandler(reconciler.Client, reconciler.Log, mgr.GetEventRecorderFor("opengauss-operator"))
 	option := controller.Options{
 		MaxConcurrentReconciles: concurrentConciler,
 	}
@@ -87,20 +89,24 @@ func (r *OpenGaussClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		r.Log.Info(fmt.Sprintf("[%s:%s]删除集群", cluster.Namespace, cluster.Name))
 
 		//添加资源清理操作
+
 		r.Log.Info(fmt.Sprintf("[%s:%s]删除集群完成", cluster.Namespace, cluster.Name))
 		return reconcile.Result{}, nil
 	}
+
 	//如果校验结果无需操作，则结束
 	instance := cluster.DeepCopy()
 	valid, doReconcile := r.syncHandler.Validate(instance)
 	if !doReconcile {
 		return reconcile.Result{}, nil
 	}
-
+	if instance.Spec.Schedule.PollingPeriod == 0 {
+		instance.Spec.Schedule.PollingPeriod = r.PollingPeriod
+	}
 	//如果校验通过，对空属性填充默认值
 	if valid {
 		if err := r.syncHandler.SetDefault(instance); err != nil {
-			return reconcile.Result{RequeueAfter: time.Second * REQUEUE_INTERVAL}, err
+			return reconcile.Result{RequeueAfter: time.Second * time.Duration(cluster.Spec.Schedule.PollingPeriod)}, err
 		}
 	}
 
@@ -108,7 +114,7 @@ func (r *OpenGaussClusterReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err := r.syncHandler.SyncCluster(instance); err != nil {
 		r.Log.Error(err, fmt.Sprintf("[%s:%s]配置集群发生错误，将于%d秒后重试", instance.Namespace, instance.Name, REQUEUE_INTERVAL))
 		time.Sleep(time.Second * REQUEUE_INTERVAL)
-		return reconcile.Result{RequeueAfter: time.Second * REQUEUE_INTERVAL}, err
+		return reconcile.Result{RequeueAfter: time.Second * time.Duration(cluster.Spec.Schedule.PollingPeriod)}, err
 	}
-	return reconcile.Result{RequeueAfter: time.Second * REQUEUE_INTERVAL}, nil
+	return reconcile.Result{RequeueAfter: time.Second * time.Duration(cluster.Spec.Schedule.PollingPeriod)}, nil
 }
