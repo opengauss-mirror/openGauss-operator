@@ -31,7 +31,7 @@ source ~/.bashrc
 ```
 或直接下载[kubectl](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/)
 ```bash
-wget http://wenyu-software.oss-cn-hangzhou.aliyuncs.com/kubectl-v1.20.0 -o /usr/bin/kubectl
+curl -L https://dl.k8s.io/release/v1.20.0/bin/linux/amd64/kubectl -o /usr/bin/kubectl
 chmod +x /usr/bin/kubectl
 ```
 
@@ -115,51 +115,38 @@ kubectl-calico get wep --all-namespaces --allow-version-mismatch
 ```
 # 镜像
 
-openGauss镜像及依赖都以openEuler为准进行演示，演示版本为5.0.2。可以根据需要调整相关依赖或版本
+用于演示的openGauss版本为5.0.2，以openEuler-20.03作为镜像的基础发行版。可以根据需要调整相关依赖或版本。
 ## 1. openEuler  
-验证openEuler镜像是否能够满足正常启动，首先加载下载的镜像
+首先从官方镜像站下载镜像，并加载到docker中。
 ```bash
-wget http://121.36.97.194/openEuler-20.03-LTS-SP3/docker_img/x86_64/openEuler-docker.x86_64.tar.xz
-docker image load -i openEuler-docker.x86_64.tar.xz
+wget https://repo.openeuler.org/openEuler-20.03-LTS-SP3/docker_img/x86_64/openEuler-docker.x86_64.tar.xz
+docker load -i openEuler-docker.x86_64.tar.xz
 ```
-启动openEuler镜像
-```bash
-docker run -it openeuler-20.03-lts-sp3 /bin/bash
-```
-进入container验证安装需要的软件，配置依赖
-```bash
-# 关闭TMOUT自动登出
-echo 'unset TMOUT' >> /etc/bashrc
-# 安装需要的软件
-yum -y install sudo which bzip2 numactl-devel libaio libaio-devel readline-devel net-tools psmisc iotop
-yum -y install lrzsz iputils libnsl
-```
+加载后的镜像标签为：`openeuler-20.03-lts-sp3:latest`。
+
 ## 2. openGauss
 
-上述步骤都可以正常执行，确定openEuler镜像验证无误后，构建openGauss镜像
-
-打包镜像需要依赖`tini-amd64`, `scriptrunner_x86`, `filebeat-7.16.1-linux-x86_64.tar.gz` 以及 `openGauss-5.0.2-openEuler-64bit.tar.bz2`文件。 \
-`tini-amd64`, `scriptrunner_x86`文件在当前仓库`openGauss-operator/execfiles`目录下。 \
-`filebeat-7.11.1-linux-x86_64.tar.gz`下载地址参考下面第3步骤 *准备openGauss容器相关的介质和依赖*。 \
-openGauss的镜像从社区官网下载极简版。
+打包镜像需要依赖`tini-amd64`, `scriptrunner_x86`, `filebeat-7.16.1-linux-x86_64.tar.gz` 以及 `openGauss-5.0.2-openEuler-64bit.tar.bz2`文件。
 
 ```
-# 下载openGauss安装极简版介质（如下载企业版，还需对应修改Dockerfile文件）
+# 官网下载openGauss安装极简版介质（如下载企业版，还需对应修改Dockerfile文件）
 wget https://opengauss.obs.cn-south-1.myhuaweicloud.com/5.0.2/x86_openEuler/openGauss-5.0.2-openEuler-64bit.tar.bz2
 wget https://opengauss.obs.cn-south-1.myhuaweicloud.com/5.0.2/x86_openEuler/openGauss-5.0.2-openEuler-64bit-symbol.tar.gz
+
+# 下载 scriptrunner_x86。该文件在当前仓库`openGauss-operator/execfiles`目录下
+wget https://gitee.com/opengauss/openGauss-operator/blob/master/execfiles/scriptrunner_x86
+
 # 下载 filebeat-7.16.1
 curl -LO https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-7.16.1-linux-x86_64.tar.gz
+
 # 下载 tini-amd64
 curl -LO https://github.com/krallin/tini/releases/download/v0.19.0/tini-amd64
 
 # 构建openGauss镜像
 docker build -f og5.0.2-x86_64.dockerfile -t opengauss-5.0.2:latest .
-
-# 保存openGauss镜像
-docker save opengauss-5.0.2:latest -o opengauss-docker.x86_64.tar
 ```
 
-`og5.0.2-x86_64.dockerfile`：（可以根据实际需求修改openGauss版本、架构、系统OS镜像信息。）
+用于构建openGauss镜像的dockerfile配置文件`og5.0.2-x86_64.dockerfile`：（可以根据实际需求修改openGauss版本、架构、系统OS镜像信息。）
 
 ```
 # 5.0.2 image build
@@ -183,7 +170,7 @@ ENV GAUSSLOG /gaussarch/log/omm
 ENV GAUSS_ENV 2
 ENV GS_CLUSTER_NAME openGauss
 
-RUN yum -y install sudo hostname which bzip2 numactl-devel libaio libaio-devel readline-devel net-tools psmisc coreutils iotop perf sysstat iperf3 && \ 
+RUN yum -y install sudo hostname which bzip2 numactl-devel libaio libaio-devel readline-devel net-tools psmisc coreutils iotop perf sysstat iperf3 lrzsz iputils libnsl && \ 
  echo 'omm ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers && \
  groupadd -g 580 dbgrp && \
  useradd -g dbgrp -u 580 omm && \
@@ -242,7 +229,7 @@ gs_initdb --locale=en_US.UTF-8 -w omm@1234 --nodename=gaussdb -D  /gaussdata/ope
 ```
 ## 3. operator
 
-前面的验证步骤通过以后，可以开始打包operator。
+前面的验证步骤通过以后，可以开始构建operator镜像
 
 1. 准备go环境
 
@@ -254,12 +241,11 @@ echo "export GOROOT=/usr/local/go" >> /etc/profile
 echo "export PATH=\$PATH:\$GOROOT/bin" >> /etc/profile
 source /etc/profile
 go version 
-go env -w GO111MODULE=auto
 # 设置 GOPROXY
 go env -w GOPROXY=https://goproxy.cn,direct
 ```
 
-2. 克隆openGauss operator到本地
+2. 克隆openGauss operator到本地并进入项目根目录：
 
 ```bash
 git clone https://gitee.com/opengauss/openGauss-operator.git
@@ -279,7 +265,7 @@ make deploy IMG=opengauss-operator:v2.0.0
 ```
 > 注意：此处的镜像为上个步骤生成的镜像
 >
-> 使用make deploy命令时，需要修改源码路径(config/manager/kustomization.yaml)的image的newName和newTag，需要根据实际情况进行修改。修改完成后进行deployment的部署，使用的namespace是opengauss-operator-system。
+> 使用make deploy命令时，需要修改源码路径(config/manager/kustomization.yaml)的image的newName和newTag，定义了部署资源时operator镜像名以及版本号，需要根据实际情况进行修改。修改完成后进行deployment的部署，使用的namespace是opengauss-operator-system。
 
 若部署operator过程中报错：
 
@@ -321,7 +307,7 @@ opengauss-operator-controller-manager-0   1/1     Running   0          7m48s
 ```bash
 kubectl apply -f sample.yaml 
 ```
-`sample.yaml`：
+编写openGauss集群的配置文件（或直接使用项目目录下的示例`sample.yaml`），并启动集群：
 
 ```
 apiVersion: opengauss.sig/v1
