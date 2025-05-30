@@ -1,0 +1,55 @@
+#vector DB for dify
+opengaussOperator:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: swr.cn-north-4.myhuaweicloud.com/kunpeng-ai/opengauss-operator
+    tag: v0.1.0
+  pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  nameOverride: ""
+  fullnameOverride: ""
+  resources:
+    limits:
+      cpu: 200m
+      memory: 500Mi
+    requests:
+      cpu: 100m
+      memory: 20Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  env:
+    INSTANCE_NAME: "opengauss"
+    TOTAL_COUNT: "1"
+    K8S_VERSION: "1.28.4"
+  service:
+    port: 8080
+  terminationGracePeriodSeconds: 10
+
+opengaussCluster:
+  enabled: true
+  cpu: "0"
+  storage: 10Gi
+  image: swr.cn-north-4.myhuaweicloud.com/kunpeng-ai/opengauss:v7.0.0-RC1-adapt-ogoperator
+  memory: 10G
+  readport: 30001
+  writeport: 30002
+  localrole: primary
+  dbport: 5432
+  storageclass: opengauss-hostpath
+  networkclass: calico
+  sidecarimage: swr.cn-north-4.myhuaweicloud.com/kunpeng-ai/opengauss:v7.0.0-RC1-adapt-ogoperator
+  config: {}
+  accessModes: ReadWriteOnce
+  dataStorage: 20Gi
+  logStorage: 20Gi
+  iplist: []
+  paths:
+  - data: /usr/local/dify/opdata
+    log: /usr/local/dify/oplog
+  - data: /usr/local/dify/opdata2
+    log: /usr/local/dify/oplog2
+  - data: /usr/local/dify/opdata3
+    log: /usr/local/dify/oplog3

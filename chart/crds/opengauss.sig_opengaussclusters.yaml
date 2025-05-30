@@ -1,0 +1,369 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.4.1
+  creationTimestamp: null
+  name: opengaussclusters.opengauss.sig
+spec:
+  group: opengauss.sig
+  names:
+    kind: OpenGaussCluster
+    listKind: OpenGaussClusterList
+    plural: opengaussclusters
+    shortNames:
+    - ogc
+    singular: opengausscluster
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: OpenGaussCluster LocalRole
+      jsonPath: .spec.localrole
+      name: Role
+      type: string
+    - description: OpenGaussCluster CPU Limit
+      jsonPath: .spec.cpu
+      name: CPU
+      type: string
+    - description: OpenGaussCluster Memory Limit
+      jsonPath: .spec.memory
+      name: Memory
+      type: string
+    - description: OpenGaussCluster Read Service Port
+      jsonPath: .spec.readport
+      name: Read Port
+      type: integer
+    - description: OpenGaussCluster Write Service Port
+      jsonPath: .spec.writeport
+      name: Write Port
+      type: integer
+    - description: OpenGaussCluster DB Port
+      jsonPath: .spec.dbport
+      name: DB Port
+      type: integer
+    - description: OpenGaussCluster state
+      jsonPath: .status.state
+      name: State
+      type: string
+    - description: OpenGaussCluster Primary Instance
+      jsonPath: .status.primary
+      name: Primary
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - description: OpenGaussCluster Image
+      jsonPath: .spec.image
+      name: Image
+      priority: 1
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: OpenGaussCluster is the Schema for the opengaussclusters API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OpenGaussClusterSpec defines the desired state of OpenGaussCluster
+            properties:
+              annotations:
+                additionalProperties:
+                  type: string
+                type: object
+              archivelogpath:
+                type: string
+              backuppath:
+                type: string
+              bandwidth:
+                type: string
+              config:
+                additionalProperties:
+                  type: string
+                type: object
+              cpu:
+                type: string
+              customizedenv:
+                additionalProperties:
+                  type: string
+                type: object
+              dbport:
+                format: int32
+                type: integer
+              filebeatconfig:
+                type: string
+              hostpathroot:
+                type: string
+              image:
+                type: string
+              iplist:
+                items:
+                  description: IpNodeEntry defines a ip and name of the node which
+                    the ip located
+                  properties:
+                    extendip:
+                      type: string
+                    ip:
+                      type: string
+                    nodename:
+                      type: string
+                  required:
+                  - ip
+                  type: object
+                type: array
+              labels:
+                additionalProperties:
+                  type: string
+                type: object
+              localrole:
+                type: string
+              maintenance:
+                type: boolean
+              memory:
+                type: string
+              networkclass:
+                type: string
+              readport:
+                format: int32
+                type: integer
+              remoteiplist:
+                items:
+                  type: string
+                type: array
+              restorefile:
+                type: string
+              schedule:
+                properties:
+                  gracePeriod:
+                    format: int32
+                    type: integer
+                  livenessProbePeriod:
+                    format: int32
+                    type: integer
+                  mostavailabletimeout:
+                    format: int32
+                    type: integer
+                  nodelabels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  nodes:
+                    description: 选择可部署的节点
+                    items:
+                      type: string
+                    type: array
+                  pollingPeriod:
+                    format: int64
+                    type: integer
+                  processTimeout:
+                    format: int32
+                    type: integer
+                  readinessProbePeriod:
+                    format: int32
+                    type: integer
+                  toleration:
+                    format: int32
+                    type: integer
+                type: object
+              scriptconfig:
+                type: string
+              sidecarcpu:
+                type: string
+              sidecarimage:
+                type: string
+              sidecarmemory:
+                type: string
+              sidecarstorage:
+                type: string
+              storage:
+                type: string
+              storageclass:
+                type: string
+              writeport:
+                format: int32
+                type: integer
+            type: object
+          status:
+            description: OpenGaussClusterStatus defines the observed state of OpenGaussCluster
+            properties:
+              conditions:
+                items:
+                  properties:
+                    lastUpdateTime:
+                      type: string
+                    message:
+                      type: string
+                    status:
+                      type: string
+                    type:
+                      type: string
+                  type: object
+                type: array
+              lastUpdateTime:
+                type: string
+              message:
+                type: string
+              podstate:
+                additionalProperties:
+                  type: string
+                type: object
+              primary:
+                type: string
+              restore:
+                type: string
+              spec:
+                description: OpenGaussClusterSpec defines the desired state of OpenGaussCluster
+                properties:
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  archivelogpath:
+                    type: string
+                  backuppath:
+                    type: string
+                  bandwidth:
+                    type: string
+                  config:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  cpu:
+                    type: string
+                  customizedenv:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  dbport:
+                    format: int32
+                    type: integer
+                  filebeatconfig:
+                    type: string
+                  hostpathroot:
+                    type: string
+                  image:
+                    type: string
+                  iplist:
+                    items:
+                      description: IpNodeEntry defines a ip and name of the node which
+                        the ip located
+                      properties:
+                        extendip:
+                          type: string
+                        ip:
+                          type: string
+                        nodename:
+                          type: string
+                      required:
+                      - ip
+                      type: object
+                    type: array
+                  labels:
+                    additionalProperties:
+                      type: string
+                    type: object
+                  localrole:
+                    type: string
+                  maintenance:
+                    type: boolean
+                  memory:
+                    type: string
+                  networkclass:
+                    type: string
+                  readport:
+                    format: int32
+                    type: integer
+                  remoteiplist:
+                    items:
+                      type: string
+                    type: array
+                  restorefile:
+                    type: string
+                  schedule:
+                    properties:
+                      gracePeriod:
+                        format: int32
+                        type: integer
+                      livenessProbePeriod:
+                        format: int32
+                        type: integer
+                      mostavailabletimeout:
+                        format: int32
+                        type: integer
+                      nodelabels:
+                        additionalProperties:
+                          type: string
+                        type: object
+                      nodes:
+                        description: 选择可部署的节点
+                        items:
+                          type: string
+                        type: array
+                      pollingPeriod:
+                        format: int64
+                        type: integer
+                      processTimeout:
+                        format: int32
+                        type: integer
+                      readinessProbePeriod:
+                        format: int32
+                        type: integer
+                      toleration:
+                        format: int32
+                        type: integer
+                    type: object
+                  scriptconfig:
+                    type: string
+                  sidecarcpu:
+                    type: string
+                  sidecarimage:
+                    type: string
+                  sidecarmemory:
+                    type: string
+                  sidecarstorage:
+                    type: string
+                  storage:
+                    type: string
+                  storageclass:
+                    type: string
+                  writeport:
+                    format: int32
+                    type: integer
+                type: object
+              state:
+                type: string
+              syncState:
+                items:
+                  properties:
+                    ip:
+                      type: string
+                    percent:
+                      type: integer
+                    priority:
+                      type: integer
+                    state:
+                      type: string
+                  type: object
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []

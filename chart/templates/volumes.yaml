@@ -1,0 +1,44 @@
+{{- if .Values.opengaussOperator.enabled }}
+{{- range $index, $pod := .Values.opengaussCluster.iplist }}
+{{- $ip := $pod.ip }}
+{{- $nodename := $pod.nodename }}
+
+{{- $cleanIP := replace "." "x" $ip }}
+{{- $podName := printf "og-opengausscluster-pod-%s" $cleanIP }}
+{{- $path := index $.Values.opengaussCluster.paths $index }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ $podName }}-data
+  labels:
+    pv: {{ $podName }}-data
+spec:
+  capacity:
+    storage: {{ $.Values.opengaussCluster.dataStorage }}
+  volumeMode: Filesystem
+  accessModes:
+    - {{ $.Values.opengaussCluster.accessModes }}
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ $.Values.opengaussCluster.storageclass }}
+  hostPath:
+    path: "{{ $path.data }}"
+
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ $podName }}-log
+  labels:
+    pv: {{ $podName }}-log
+spec:
+  capacity:
+    storage: {{ $.Values.opengaussCluster.logStorage }}
+  volumeMode: Filesystem
+  accessModes:
+    - {{ $.Values.opengaussCluster.accessModes }}
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: {{ $.Values.opengaussCluster.storageclass }}
+  hostPath:
+    path: "{{ $path.log }}"
+{{- end }}
+{{- end }}

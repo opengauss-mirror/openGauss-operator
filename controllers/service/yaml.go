@@ -85,6 +85,7 @@ data:
   filebeat.opengauss.yml: |
     filebeat.inputs:
     - type: log
+      id: auditlog-input
       enabled: true
       paths:
       - /gaussarch/*audit.log
@@ -94,6 +95,7 @@ data:
         clusterName: ${CR_NAME}
       fields_under_root: true
     - type: log
+      id: syslog-input
       enabled: true
       paths:
       - /gaussarch/log/omm/pg_log/*.log
@@ -103,6 +105,7 @@ data:
         clusterName: ${CR_NAME}
       fields_under_root: true
     - type: log
+      id: omlog-input
       enabled: true
       paths:
       - /gaussarch/log/omm/bin/*/*.log
@@ -659,6 +662,34 @@ data:
     mkdir -p /gaussarch/log/omm/pg_log
     f_PrintLog "INFO" "Check whether is new pvc"
     if [ ${NEED_INIT} != "true" ] ; then
+        # configmap 挂载，解析参数。过滤注释行和空行
+        cat /gauss/files/cm-mnt/postgres-cm.conf > ~/postgres-cm.conf.tmp
+        sed -i 's|\t| |' ~/postgres-cm.conf.tmp
+        grep -E -v '^ *#|^ *$' ~/postgres-cm.conf.tmp > ~/postgres-cm.conf
+        while read line
+        do
+            eval $(echo ${line} | awk -F '=' '{printf("key1=%s;value1=%s",$1,$2)}')
+            echo "Parsing parameter: key=${key1}, value=${value1}"
+            if [ -z "${key1}" -o -z "${value1}" ]; then
+                echo "Parsing parameter error, please remove the data directory for reinstallation."
+                exit 1
+            fi
+            gs_guc set -D /gaussdata/openGauss/db1/ -c "${line}" > /dev/null
+            gs_guc set -D /gaussdata/openGauss/db1/ -c "password_encryption_type=0" > /dev/null
+            chkCmdNO "ERROR" 'Command failed: gs_guc set -D /gaussdata/openGauss/db1/ -c "${line}"'
+        done < ~/postgres-cm.conf
+        echo 'enable_numa = false' >> "${PGDATA}/mot.conf"
+        
+        f_PrintLog "INFO" 'Starting openGauss ...'
+        gs_ctl -D ${PGDATA} -w start
+        sleep 6
+
+        # f_PrintLog "INFO" 'Start create user zabbix and backupuser ...'
+        gsql -d postgres -p ${CR_DB_PORT} -c "create user dbpaasop with sysadmin monadmin password '${DBPAASOP_PASSWD}'"
+        f_PrintLog "INFO" 'Stopping openGauss ...'
+        gs_ctl -D ${PGDATA} -m fast -w stop
+        sleep 3
+
         f_PrintLog "INFO" "pvc already exists, not need init"
         exit 0
     fi
@@ -690,6 +721,7 @@ data:
             exit 1
         fi
         gs_guc set -D /gaussdata/openGauss/db1/ -c "${line}" > /dev/null
+        gs_guc set -D /gaussdata/openGauss/db1/ -c "password_encryption_type=0" > /dev/null
         chkCmdNO "ERROR" 'Command failed: gs_guc set -D /gaussdata/openGauss/db1/ -c "${line}"'
     done < ~/postgres-cm.conf
     echo 'enable_numa = false' >> "${PGDATA}/mot.conf"
@@ -721,7 +753,6 @@ data:
     sudo chown -R omm:dbgrp /gaussdata
     sudo chown -R omm:dbgrp /gauss/files
     sudo chown -R omm:dbgrp /gaussarch
-    
     touch /gauss/files/maintenance-bak
     touch /gauss/files/maintenance
     chmod 755 /gauss/files/*/*.sh
@@ -756,11 +787,11 @@ data:
     gs_ctl -D ${PGDATA} -w start -M pending &
     [ "$?" -ne 0 ] && echo "Database startup failure." 
 
-    scriptrunnerPath=$(whereis scriptrunner | awk -F ':' '{print $2}')
-    if [ "$scriptrunnerPath" != '' ]; then
-      mkdir -p /gauss/files/logs/
-     nohup scriptrunner -c /gauss/files/script/scriptconfig-og.ini >> /gauss/files/logs/scriptrunner-og.log &
-    fi
+    # scriptrunnerPath=$(whereis scriptrunner | awk -F ':' '{print $2}')
+    # if [ "$scriptrunnerPath" != '' ]; then
+    #   mkdir -p /gauss/files/logs/
+    #  nohup scriptrunner -c /gauss/files/script/scriptconfig-og.ini >> /gauss/files/logs/scriptrunner-og.log &
+    # fi
     #通过curl到kubernetes服务判断当前Pod是否成为孤岛
     #连续30次心跳失败，则判定当前Pod成为孤岛，停止主进程使Pod重启
     count=0
@@ -802,11 +833,11 @@ data:
     sudo ln -s /gauss/files/cm-mnt/* /gauss/files/
     sudo chown -R omm:dbgrp /gauss/files
     chmod 755 /gauss/files/*/*.sh
-    scriptrunnerPath=$(whereis scriptrunner | awk -F ':' '{print $2}')
-    if [ "$scriptrunnerPath" != '' ]; then
-      mkdir -p /gauss/files/logs/
-      nohup scriptrunner -c /gauss/files/script/scriptconfig-sidecar.ini >> /gauss/files/logs/scriptrunner-sidecar.log &
-    fi
+    # scriptrunnerPath=$(whereis scriptrunner | awk -F ':' '{print $2}')
+    # if [ "$scriptrunnerPath" != '' ]; then
+    #   mkdir -p /gauss/files/logs/
+    #   nohup scriptrunner -c /gauss/files/script/scriptconfig-sidecar.ini >> /gauss/files/logs/scriptrunner-sidecar.log &
+    # fi
     
     cd /opt/filebeat
     echo "INFO" "Start filebeat ..."
@@ -820,6 +851,7 @@ data:
     # grep -E -v '^ *#|^ *$' ~/postgres-cm.conf.tmp
     # gs_guc set -D /gaussdata/openGauss/db1/ -c "${line}"
     modify_initial_password=false
+    password_encryption_type=0
     archive_mode=on
     archive_dest='/gaussdata/archive/archive_xlog'
     #max_connections=20000
@@ -854,7 +886,6 @@ data:
     recovery_max_workers=4
     checkpoint_segments=1024
     checkpoint_completion_target=0.8
-    password_encryption_type=2
     session_timeout=0
     enable_alarm=off
     enable_codegen=off
@@ -875,6 +906,7 @@ data:
     port=${CR_DB_PORT}
     listen_addresses='*'
     remote_read_mode=non_authentication
+    password_encryption_type=0
     # 设置备机可读
     hot_standby=on`
 
@@ -964,8 +996,9 @@ spec:
   resources:
     requests:
       storage: ${PVC_STORAGE_REQ}
-  storageClassName: ${PVC_STORAGE_CLASS}`
-
+  storageClassName: ${PVC_STORAGE_CLASS}
+  volumeName: ${POD_NAME}-${PVC_TYPE}`
+  
 	YAML_POD = `apiVersion: v1
 kind: Pod
 metadata:

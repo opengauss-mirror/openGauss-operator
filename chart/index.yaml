@@ -1,0 +1,14 @@
+apiVersion: v1
+entries:
+  ogoperator:
+  - apiVersion: v2
+    appVersion: 1.0.0
+    created: "2025-06-17T21:23:07.662748623+08:00"
+    description: A Helm chart for deploying the OpenGauss Operator
+    digest: 62b39de0c41551cf2154d797673efc17ef2fc09a10b268dadd50dbcf97627ca5
+    name: ogoperator
+    type: application
+    urls:
+    - templates/ogoperator-0.1.0.tgz
+    version: 0.1.0
+generated: "2025-06-17T21:23:07.661234835+08:00"

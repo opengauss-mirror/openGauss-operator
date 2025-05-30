@@ -1,0 +1,22 @@
+{{- if .Values.opengaussCluster.enabled }}
+apiVersion: opengauss.sig/v1
+kind: OpenGaussCluster
+metadata:
+  name: opengausscluster
+spec:
+  cpu: {{ .Values.opengaussCluster.cpu | quote }}
+  storage: {{ .Values.opengaussCluster.storage }}
+  image: "{{ .Values.opengaussCluster.image }}"
+  memory: {{ .Values.opengaussCluster.memory }}
+  readport: {{ .Values.opengaussCluster.readport }}
+  writeport: {{ .Values.opengaussCluster.writeport }}
+  localrole: {{ .Values.opengaussCluster.localrole }}
+  dbport: {{ .Values.opengaussCluster.dbport }}
+  storageclass: {{ .Values.opengaussCluster.storageclass }}
+  networkclass: calico
+  sidecarimage: "{{ .Values.opengaussCluster.image }}"
+  config:
+{{ toYaml .Values.opengaussCluster.config | nindent 4 }}
+  iplist:    
+{{ toYaml .Values.opengaussCluster.iplist | indent 4 }}
+{{- end }}

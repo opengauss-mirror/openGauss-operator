@@ -1,0 +1,16 @@
+{{- if .Values.opengaussOperator.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "opengauss-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    control-plane: controller-manager
+spec:
+  ports:
+    - port: {{ .Values.opengaussOperator.service.port }}
+      name: operator
+  clusterIP: None
+  selector:
+    control-plane: controller-manager
+{{- end }}

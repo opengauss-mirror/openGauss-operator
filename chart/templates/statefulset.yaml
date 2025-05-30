@@ -1,0 +1,50 @@
+{{- if .Values.opengaussOperator.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "opengauss-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    control-plane: controller-manager
+spec:
+  serviceName: svc
+  replicas: {{ .Values.opengaussOperator.replicaCount }}
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        control-plane: controller-manager
+    spec:
+      containers:
+        - name: manager
+          image: "{{ .Values.opengaussOperator.image.repository }}:{{ .Values.opengaussOperator.image.tag }}"
+          imagePullPolicy: {{ .Values.opengaussOperator.image.pullPolicy }}
+          command:
+            - /usr/local/bin/opengauss-operator
+          args:
+            - --leader-elect
+          env:
+            - name: INSTANCE_NAME
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.name
+            - name: TOTAL_COUNT
+              value: "{{ .Values.opengaussOperator.env.TOTAL_COUNT }}"
+            - name: K8S_VERSION
+              value: {{ .Values.opengaussOperator.env.K8S_VERSION }}
+          resources:
+            limits:
+              cpu: {{ .Values.opengaussOperator.resources.limits.cpu }}
+              memory: {{ .Values.opengaussOperator.resources.limits.memory }}
+            requests:
+              cpu: {{ .Values.opengaussOperator.resources.requests.cpu }}
+              memory: {{ .Values.opengaussOperator.resources.requests.memory }}
+      terminationGracePeriodSeconds: {{ .Values.opengaussOperator.terminationGracePeriodSeconds }}
+      {{- if .Values.opengaussOperator.affinity }}
+      affinity:
+{{ toYaml .Values.opengaussOperator.affinity | indent 8 }}
+      {{- end }}
+{{- end }}
