@@ -28,6 +28,7 @@ const (
 	CR_BACKUP_PATH      = "CR_BACKUP_PATH"
 	CR_SVC_PORT         = "CR_SVC_PORT"
 	CR_DB_PORT          = "CR_DB_PORT"
+	CR_DB_PASSWD        = "CR_DB_PASSWD"
 	SVC_NAME            = "SVC_NAME"
 	DB_ROLE             = "DB_ROLE"
 	POD_NAME            = "POD_NAME"
@@ -998,7 +999,7 @@ spec:
       storage: ${PVC_STORAGE_REQ}
   storageClassName: ${PVC_STORAGE_CLASS}
   volumeName: ${POD_NAME}-${PVC_TYPE}`
-  
+
 	YAML_POD = `apiVersion: v1
 kind: Pod
 metadata:
@@ -1224,16 +1225,18 @@ metadata:
     uid: ${CR_UID}
 type: Opaque
 data:
-  INIT_PASSWD: SzhTQGFkbWlu
-  DBPAASOP_PASSWD: SzhTQGFkbWlu`
+  INIT_PASSWD: ${CR_DB_PASSWD}
+  DBPAASOP_PASSWD: ${CR_DB_PASSWD}`
 )
 
 func GetParamsWithObjReference(cluster *opengaussv1.OpenGaussCluster, params map[string]string) {
+	spec := cluster.GetValidSpec()
 	params[CR_NAME] = cluster.Name
 	params[CR_NAMESPACE] = cluster.Namespace
 	params[CR_API_VERSION] = cluster.APIVersion
 	params[CR_KIND] = cluster.Kind
 	params[CR_UID] = string(cluster.UID)
+	params[CR_DB_PASSWD] = spec.DBPasswd
 }
 
 func GetResourceYaml(yamlstr string, params map[string]string) string {

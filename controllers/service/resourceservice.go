@@ -1074,6 +1074,7 @@ func (r *resourceService) newPod(cluster *opengaussv1.OpenGaussCluster, entry op
 	params[CR_BACKUP_PATH] = spec.BackupPath
 	params[CR_ARCHIVE_PATH] = spec.ArchiveLogPath
 	params[CR_DB_PORT] = fmt.Sprint(spec.DBPort)
+	params[CR_DB_PASSWD] = spec.DBPasswd
 	params[CLUSTER_CM_NAME] = OG_CLUSTER_CONFIGMAP_NAME
 	params[CLUSTER_CM_VAL] = cluster.GetConfigMapName()
 	params[SCRIPT_CM_NAME] = OG_SCRIPT_CONFIGMAP_NAME

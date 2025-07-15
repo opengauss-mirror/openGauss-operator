@@ -29,6 +29,7 @@ type OpenGaussClusterSpec struct {
 	ReadPort       int32             `json:"readport,omitempty"`       //读端口
 	WritePort      int32             `json:"writeport,omitempty"`      //写端口
 	DBPort         int32             `json:"dbport,omitempty"`         //数据库端口
+	DBPasswd       string            `json:"dbpasswd,omitempty"`       //数据库密码
 	Image          string            `json:"image,omitempty"`          //镜像地址
 	SidecarImage   string            `json:"sidecarimage,omitempty"`   //sidecar镜像地址
 	LocalRole      string            `json:"localrole,omitempty"`      //集群角色 {primary | standby}

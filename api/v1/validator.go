@@ -38,6 +38,9 @@ func (cluster *OpenGaussCluster) Validate() error {
 		if cluster.Spec.DBPort != cluster.Status.Spec.DBPort {
 			errorMessage = append(errorMessage, "属性\"DBPort\"不支持修改")
 		}
+		if cluster.Spec.DBPasswd != cluster.Status.Spec.DBPasswd {
+			errorMessage = append(errorMessage, "属性\"DBPasswd\"不支持修改")
+		}
 		if cluster.Spec.HostpathRoot != cluster.Status.Spec.HostpathRoot {
 			errorMessage = append(errorMessage, fmt.Sprintf("属性\"HostpathRoot\"不支持修改"))
 		}

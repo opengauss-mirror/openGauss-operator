@@ -141,6 +141,7 @@ CRD主要属性见下表
 | ReadPort       | Int          | NodePort读端口                   |
 | WritePort      | int          | NodePort写端口                   |
 | DBPort         | int          | OpenGauss实例端口                |
+| DBPasswd       | string       | OpenGauss实例密码                |
 | Image          | string       | OpenGauss镜像地址                |
 | LocalRole      | string       | 集群角色 ：primary /standby      |
 | CPU            | string       | OpenGauss实例CPU限额             |
