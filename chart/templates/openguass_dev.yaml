@@ -12,6 +12,7 @@ spec:
   writeport: {{ .Values.opengaussCluster.writeport }}
   localrole: {{ .Values.opengaussCluster.localrole }}
   dbport: {{ .Values.opengaussCluster.dbport }}
+  dbpasswd: {{ .Values.opengaussCluster.dbpasswd | b64enc | quote}}
   storageclass: {{ .Values.opengaussCluster.storageclass }}
   networkclass: calico
   sidecarimage: "{{ .Values.opengaussCluster.image }}"

@@ -41,6 +41,10 @@ spec:
       jsonPath: .spec.dbport
       name: DB Port
       type: integer
+    - description: OpenGaussCluster DB PPasswd
+      jsonPath: .spec.dbpasswd
+      name: DB Passwd
+      type: string
     - description: OpenGaussCluster state
       jsonPath: .status.state
       name: State
@@ -96,6 +100,8 @@ spec:
               dbport:
                 format: int32
                 type: integer
+              dbpasswd:
+                type: string
               filebeatconfig:
                 type: string
               hostpathroot:
@@ -242,6 +248,8 @@ spec:
                   dbport:
                     format: int32
                     type: integer
+                  dbpasswd:
+                    type: string
                   filebeatconfig:
                     type: string
                   hostpathroot:

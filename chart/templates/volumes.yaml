@@ -6,6 +6,7 @@
 {{- $cleanIP := replace "." "x" $ip }}
 {{- $podName := printf "og-opengausscluster-pod-%s" $cleanIP }}
 {{- $path := index $.Values.opengaussCluster.paths $index }}
+---
 apiVersion: v1
 kind: PersistentVolume
 metadata:

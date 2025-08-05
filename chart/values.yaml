@@ -38,6 +38,7 @@ opengaussCluster:
   writeport: 30002
   localrole: primary
   dbport: 5432
+  dbpasswd: SzhTQGFkbWlu
   storageclass: opengauss-hostpath
   networkclass: calico
   sidecarimage: swr.cn-north-4.myhuaweicloud.com/kunpeng-ai/opengauss:v7.0.0-RC1-adapt-ogoperator

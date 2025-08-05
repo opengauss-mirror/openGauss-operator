@@ -34,6 +34,7 @@ const (
 	SIDECAR_STORAGE_REQ            = "1Gi"
 	DEFAULT_STORAGE_CLASS          = "topolvm-provisioner"
 	DEFAULT_DB_PORT                = 5432
+	DEFAULT_DB_PASSWD              = "SzhTQGFkbWlu"
 	DEFAULT_SCRIPT_CM_NAME         = "opengauss-script-config"
 	DEFAULT_FILEBEAT_CM_NAME       = "opengauss-filebeat-config"
 	DEFAULT_PROCESS_TIMEOUT        = 300
@@ -60,6 +61,11 @@ func (in *OpenGaussCluster) DefaultSpec() bool {
 	}
 	if in.Spec.DBPort == 0 {
 		in.Spec.DBPort = DEFAULT_DB_PORT
+		update = true
+	}
+
+	if in.Spec.DBPasswd == "" {
+		in.Spec.DBPasswd = DEFAULT_DB_PASSWD
 		update = true
 	}
 
