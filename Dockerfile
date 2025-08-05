@@ -9,7 +9,8 @@
 #See the Mulan PSL v2 for more details.
 
 # Build the manager binary
-FROM golang:1.15 as builder
+#FROM golang:1.15 as builder
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/golang:1.23.4-linuxarm64 as builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -28,13 +29,16 @@ COPY controllers/ controllers/
 COPY utils/ utils/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o opengauss-operator main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 GO111MODULE=on go build -a -o opengauss-operator main.go && \
+    chmod +x opengauss-operator
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
 #operator生成的默认Dockerfile会指定使用distroless做镜像基础文件，但我们无法访问原有的地址，因此需要修改为
 #FROM kubeimages/distroless-static
-FROM exploitht/operator-static
+#FROM exploitht/operator-static
+#FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/gcr.io/distroless/static-debian12:latest-linuxarm64
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/library/busybox:latest-linuxarm64
 WORKDIR /
 COPY --from=builder /workspace/opengauss-operator /usr/local/bin/opengauss-operator
 USER 65532:65532

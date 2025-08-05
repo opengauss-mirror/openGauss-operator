@@ -1,0 +1,106 @@
+# 使用 ARM64 版本的基础镜像
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/openeuler/openeuler:22.03-lts-linuxarm64
+RUN sed -i 's|https://mirrors.openeuler.org|https://mirrors.huaweicloud.com/openeuler|g' /etc/yum.repos.d/openEuler.repo
+RUN sed -i 's|http://repo.openeuler.org|https://mirrors.huaweicloud.com/openeuler|g' /etc/yum.repos.d/openEuler.repo
+RUN cat /etc/yum.repos.d/openEuler.repo
+COPY openGauss-All-7.0.0-RC1-openEuler22.03-aarch64.tar.gz .
+COPY openGauss-Symbol-7.0.0-RC1-openEuler22.03-aarch64.tar.gz .
+COPY tini-arm64 /usr/local/bin/tini
+ADD filebeat-9.0.1-linux-arm64.tar.gz /opt
+# 安装 wget 工具，用于从远程仓库下载资源
+# RUN yum -y install wget
+# WORKDIR /workspace
+# 从远程仓库下载 scriptrunner_arm64
+# RUN wget https://gitee.com/opengauss/openGauss-operator/blob/master/execfiles/scriptrunner_arm
+    # chmod +x /usr/local/bin/scriptrunner
+
+# 从远程仓库下载 openGauss ARM64 版本的安装包
+# RUN wget https://opengauss.obs.cn-south-1.myhuaweicloud.com/7.0.0-RC1/openEuler20.03/arm/openGauss-All-7.0.0-RC1-openEuler20.03-aarch64.tar.gz
+    # tar xf openGauss-All-7.0.0-RC1-openEuler20.03-aarch64.tar.gz -C /gauss/openGauss/app && \
+    # rm -rf openGauss-All-7.0.0-RC1-openEuler20.03-aarch64.tar.gz
+
+# 如果有符号表也需要下载对应的 ARM64 版本
+# RUN wget https://opengauss.obs.cn-south-1.myhuaweicloud.com/7.0.0-RC1/openEuler20.03/arm/openGauss-Symbol-7.0.0-RC1-openEuler20.03-aarch64.tar.gz
+    # tar xf openGauss-Symbol-7.0.0-RC1-openEuler20.03-aarch64.tar.gz && \
+    # cp -R symbols/* /gauss/openGauss/app && \
+    # rm -rf symbols && \
+    # rm -rf openGauss-Symbol-7.0.0-RC1-openEuler20.03-aarch64.tar.gz
+
+# 下载 tini-arm64
+# RUN wget https://gitee.com/opengauss/openGauss-operator/blob/master/execfiles/tini-arm64
+    # chmod +x /usr/local/bin/tini
+
+# 下载 filebeat 的 ARM64 版本
+# RUN wget https://gitee.com/opengauss/openGauss-operator/blob/master/execfiles/filebeat-9.0.1-linux-arm64.tar.gz
+    # tar xf /opt/filebeat-9.0.1-linux-arm64.tar.gz -C /opt && \
+    # mv /opt/filebeat-9.0.1-linux-arm64.tar.gz /opt/filebeat && \
+    # ln -s /opt/filebeat /opt/filebeat-9.0.1 && \
+    # chown -R omm:dbgrp /opt/filebeat && \
+    # chmod 755 /opt/filebeat
+
+ENV LANG en_US.UTF-8
+ENV TZ Asia/Shanghai
+ENV GAUSSHOME /gauss/openGauss/app
+ENV PATH /gauss/openGauss/app/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV LD_LIBRARY_PATH /gauss/openGauss/app/lib
+ENV PGDATA /gaussdata/openGauss/db1
+ENV PGHOST /gauss/openGauss/tmp
+ENV GAUSSLOG /gaussarch/log/omm
+ENV GAUSS_ENV 2
+ENV GS_CLUSTER_NAME openGauss
+
+RUN yum -y install sudo hostname which bzip2 numactl-devel libaio libaio-devel readline-devel net-tools psmisc coreutils iotop perf sysstat iperf3 lrzsz iputils libnsl && \ 
+ echo 'omm ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers && \
+ groupadd -g 1580 dbgrp && \
+ useradd -g dbgrp -u 1580 omm && \
+ mkdir -p /gauss/openGauss/app && \
+ mkdir -p /gauss/openGauss/tmp && \
+ mkdir -p /gaussdata/openGauss/db1 && \
+ mkdir -p /gaussarch && \
+ mkdir -p /gauss/files && \
+ tar xf openGauss-All-7.0.0-RC1-openEuler22.03-aarch64.tar.gz -C /gauss/openGauss/app && \
+ tar -jxf /gauss/openGauss/app/openGauss-Server-7.0.0-RC1-openEuler22.03-aarch64.tar.bz2 -C /gauss/openGauss/app && \
+ tar xf openGauss-Symbol-7.0.0-RC1-openEuler22.03-aarch64.tar.gz && \
+ cp -R symbols/* /gauss/openGauss/app && \
+ rm -rf symbols && \
+ rm -rf upgrade_sql.tar.gz && \
+ rm -rf /gauss/openGauss/app/openGauss-CM-7.0.0-RC1-openEuler22.03-aarch64.sha256 && \
+ rm -rf /gauss/openGauss/app/openGauss-CM-7.0.0-RC1-openEuler22.03-aarch64.tar.gz && \
+ rm -rf /gauss/openGauss/app/openGauss-Server-7.0.0-RC1-openEuler22.03-aarch64.sha256 && \
+ rm -rf /gauss/openGauss/app/openGauss-Server-7.0.0-RC1-openEuler22.03-aarch64.tar.bz2 && \
+ rm -rf openGauss-All-7.0.0-RC1-openEuler22.03-aarch64.tar.gz && \
+ rm -rf openGauss-Symbol-7.0.0-RC1-openEuler22.03-aarch64.tar.gz && \
+ chown -R omm:dbgrp /gauss && \
+ chown -R omm:dbgrp /gaussarch && \
+ chown -R omm:dbgrp /gaussdata && \
+ chown -R omm:dbgrp /gauss/openGauss && \
+ chown -R omm:dbgrp /gauss/files && \
+ chmod -R 755 /gauss/openGauss && \
+ chmod -R 755 /gaussarch && \
+ mv /opt/filebeat-9.0.1-linux-arm64 /opt/filebeat && \
+ ln -s /opt/filebeat /opt/filebeat-9.0.1 && \
+ chown -R omm:dbgrp /opt/filebeat && \
+ chmod 755 /opt/filebeat && \
+ chown -R omm:dbgrp /usr/local/bin/tini && \
+ chmod +x /usr/local/bin/tini && \
+ yum clean all && \
+ echo "export GAUSSHOME=/gauss/openGauss/app" >> /home/omm/.bashrc && \ 
+ echo "export PATH=\$GAUSSHOME:\$GAUSSHOME/bin:\$PATH " >> /home/omm/.bashrc && \
+ echo "export CMBC_SCRIPT_PATH=/cmbc_admin/openGauss" >> /home/omm/.bashrc && \
+ echo "export PATH=\$CMBC_SCRIPT_PATH:\$PATH " >> /home/omm/.bashrc && \
+ echo "export CMBC_ADMIN_PATH=/cmbc_admin" >> /home/omm/.bashrc && \
+ echo "export PATH=\$CMBC_ADMIN_PATH:\$PATH " >> /home/omm/.bashrc && \
+ echo "export LD_LIBRARY_PATH=\$GAUSSHOME/lib:\$LD_LIBRARY_PATH" >> /home/omm/.bashrc && \
+ echo "export PGDATA=/gaussdata/openGauss/db1" >> /home/omm/.bashrc && \
+ echo "export PGHOST=/gauss/openGauss/tmp" >> /home/omm/.bashrc && \
+ echo "export GAUSSLOG=/gaussarch/log/omm" >> /home/omm/.bashrc && \
+ echo "export GAUSS_ENV=2" >> /home/omm/.bashrc && \
+ echo "export GS_CLUSTER_NAME=openGauss" >> /home/omm/.bashrc && \
+ echo "alias ls='ls --color=auto'" >> /home/omm/.bashrc && \
+ echo "alias gquery='gs_ctl query -D /gaussdata/openGauss/db1 '" >> /home/omm/.bashrc && \
+ echo "alias loggings='gsql -d postgres -p 26000 -r'" >> /home/omm/.bashrc && \ 
+ source /home/omm/.bashrc && \ 
+ echo "alias ll='ls -l --color=auto'" >> /home/omm/.bashrc
+
+USER omm
+

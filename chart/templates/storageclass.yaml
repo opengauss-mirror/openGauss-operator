@@ -1,0 +1,9 @@
+{{- if .Values.opengaussOperator.enabled }}
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: opengauss-hostpath
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+parameters:
+{{- end }}

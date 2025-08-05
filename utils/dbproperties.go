@@ -138,6 +138,7 @@ func generatePostmasterProps() {
 	postmasterSet.Add("max_concurrent_autonomous_transactions")
 	postmasterSet.Add("allow_system_table_mods")
 	postmasterSet.Add("remote_read_mode")
+	postmasterSet.Add("password_encryption_type")
 	postmasterSet.Add("enable_mix_replication")
 	postmasterSet.Add("sysadmin_reserved_connections")
 	postmasterSet.Add("support_extended_features")
