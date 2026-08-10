@@ -120,9 +120,9 @@ data:
       multiline.pattern: '^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]'
       multiline.match: after
     output.elasticsearch:
-      hosts: ["192.168.1.162:9200"]
-      username: "elastic"
-      password: "elastic"
+      hosts: ["127.0.0.1:8080"]
+      username: "elasticname"
+      password: "elasticpassword"
       protocol: "http"
       pipelines:
       - pipeline: "filebeat-opengauss-syslog"
